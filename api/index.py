@@ -104,6 +104,3 @@ def get_stats():
         "least_frequent_stars": [1, 10],
         "total_draws": len(MOCK_DRAWS)
     })
-
-# Vercel requires the app to be exported
-app = app
