@@ -105,5 +105,5 @@ def get_stats():
         "total_draws": len(MOCK_DRAWS)
     })
 
-if __name__ == '__main__':
-    app.run(debug=True)
+# Vercel requires the app to be exported
+app = app
