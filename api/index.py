@@ -6,9 +6,13 @@ from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from db import ensure_schema, get_draws as db_get_draws, upsert_draw, get_latest_draw
+import logging
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
@@ -182,29 +186,127 @@ def latest_draw():
         return jsonify({"data": MOCK_DRAWS[-1]})
     return jsonify({"error": "No draws available"}), 404
 
+# Scrape latest draw from euromillones.com HTML
+def scrape_latest_draw(soup):
+    logging.info("Starting to scrape latest draw.")
+    # Find the latest result block
+    result = soup.find('div', class_='latest-result')
+    if not result:
+        logging.error("Scraper error: 'latest-result' div not found.")
+        return None
+
+    # Date
+    draw_date = None
+    date_tag = result.find('h3')
+    if date_tag:
+        date_text = date_tag.get_text(strip=True)
+        logging.info(f"Found date text: {date_text}")
+        try:
+            draw_date = datetime.strptime(date_text, '%A, %d %B %Y').strftime('%Y-%m-%d')
+        except (ValueError, TypeError) as e:
+            logging.error(f"Scraper error: Could not parse date '{date_text}'. Error: {e}")
+            return None
+    else:
+        logging.error("Scraper error: 'h3' date tag not found.")
+        return None
+
+    if not draw_date:
+        return None
+
+    # Numbers and stars
+    balls = result.find_all('div', class_='ball')
+    numbers = []
+    stars = []
+    for b in balls:
+        txt = b.get_text(strip=True)
+        try:
+            num = int(txt)
+            if 'star' in b.get('class', []):
+                stars.append(num)
+            else:
+                numbers.append(num)
+        except (ValueError, TypeError):
+            logging.warning(f"Scraper warning: Could not parse ball/star value '{txt}'. Skipping.")
+            continue
+    
+    logging.info(f"Found numbers: {numbers} and stars: {stars}")
+    if len(numbers) != 5 or len(stars) != 2:
+        logging.error(f"Scraper error: Found {len(numbers)} numbers and {len(stars)} stars. Expected 5 and 2.")
+        return None
+
+    # Jackpot
+    jackpot = None
+    jackpot_div = result.find('div', class_='jackpot')
+    if jackpot_div:
+        jackpot_text = jackpot_div.get_text(strip=True).replace(',', '').replace('€', '')
+        try:
+            jackpot = int(float(jackpot_text))
+            logging.info(f"Found jackpot: {jackpot}")
+        except (ValueError, TypeError):
+            jackpot = None
+            logging.warning("Scraper warning: Could not parse jackpot value.")
+
+    # Winners table (optional)
+    winners = {}
+    table = result.find('table')
+    if table:
+        for row in table.find_all('tr')[1:]:
+            cols = row.find_all('td')
+            if len(cols) >= 2:
+                rank = cols[0].get_text(strip=True)
+                count_text = cols[1].get_text(strip=True).replace(',', '')
+                if rank:
+                    try:
+                        winners[rank] = int(count_text)
+                    except (ValueError, TypeError):
+                        pass
+        logging.info(f"Found {len(winners)} winner tiers.")
+
+    scraped_data = {
+        "draw_date": draw_date,
+        "numbers": numbers,
+        "stars": stars,
+        "jackpot": jackpot,
+        "winners": winners
+    }
+    logging.info(f"Successfully scraped draw data for {draw_date}")
+    return scraped_data
+
 @app.route('/api/sync', methods=['GET', 'POST'])
 def sync_latest():
+    logging.info("Starting sync process.")
     # Ensure schema exists
     ensure_schema()
+    logging.info("DB schema ensured.")
 
     source_url = os.getenv('EURO_SOURCE_URL')
     if not source_url:
+        logging.error("EURO_SOURCE_URL not configured.")
         return jsonify({"error": "EURO_SOURCE_URL not configured"}), 500
+    logging.info(f"Fetching data from {source_url}")
 
     try:
-        resp = requests.get(source_url, timeout=15)
+        resp = requests.get(source_url, timeout=10)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, 'lxml')
+        logging.info("Successfully fetched and parsed source HTML.")
     except Exception as e:
+        logging.error(f"Failed to fetch source: {e}")
         return jsonify({"error": f"Failed to fetch source: {e}"}), 502
 
     # Scrape latest draw
+    logging.info("Attempting to scrape latest draw from HTML.")
     draw = scrape_latest_draw(soup)
     if not draw:
+        logging.error("Scraping returned no data. Aborting sync.")
         return jsonify({"error": "Could not parse draw from page"}), 422
+    logging.info(f"Successfully scraped draw for date: {draw.get('draw_date')}")
 
+    logging.info("Attempting to upsert draw into database.")
     ok = upsert_draw(draw)
     if not ok:
+        logging.error("Failed to persist draw to database.")
         return jsonify({"error": "Failed to persist draw"}), 500
+    logging.info("Successfully persisted draw.")
 
     return jsonify({"status": "ok", "upserted": draw.get("draw_date")})
