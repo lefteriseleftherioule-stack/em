@@ -41,6 +41,7 @@ Set up the following environment variables in your Vercel project:
 
 - `DATABASE_URL`: PostgreSQL connection string
 - `FLASK_ENV`: Set to "production" for production deployment
+- `EURO_SOURCE_URL`: JSON endpoint for latest Euromillions draw (see below)
 
 You can set these variables using the Vercel dashboard or CLI:
 ```
@@ -74,6 +75,50 @@ This repository is public. Never commit:
 - `/api/draws/{id}` - Get draw by ID
 - `/api/draws/year/{year}` - Get draws by year
 - `/api/stats` - Get statistics
+- `/api/latest` - Get most recent stored draw (DB with mock fallback)
+- `/api/sync` - Fetch latest draw from `EURO_SOURCE_URL` and upsert to DB
+
+## Automatic Updates (Cron)
+
+This project uses Vercel Cron to trigger updates on draw days (Tuesday and Friday):
+
+```
+"crons": [
+  { "path": "/api/sync", "schedule": "0 21 * * 2,5" }
+]
+```
+
+- Schedule is UTC; adjust as needed for publishing time.
+- Cron sends a GET request to `/api/sync`.
+- Ensure `EURO_SOURCE_URL` and `DATABASE_URL` are configured in Vercel.
+
+### EURO_SOURCE_URL expected formats
+
+Either provide the native format:
+
+```
+{
+  "draw_date": "2025-01-03",
+  "numbers": [1,2,3,4,5],
+  "stars": [1,2],
+  "jackpot": 30000000,
+  "winners": {"rank1": 0}
+}
+```
+
+Or a common alternative format:
+
+```
+{
+  "date": "2025-01-03T21:00:00Z",
+  "mainNumbers": [1,2,3,4,5],
+  "luckyStars": [1,2],
+  "prize": 30000000,
+  "winners": {"rank1": 0}
+}
+```
+
+If the source returns a list, the last element is used.
 
 ## Database Setup
 
