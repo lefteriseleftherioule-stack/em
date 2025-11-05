@@ -12,8 +12,5 @@
   ],
   "routes": [
     { "src": "/(.*)", "dest": "api/index.py" }
-  ],
-  "crons": [
-    { "path": "/api/sync", "schedule": "0 21 * * 2,5" }
   ]
 }
