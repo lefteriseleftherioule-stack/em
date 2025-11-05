@@ -167,66 +167,6 @@ def normalize_euro_payload(payload):
         }
     return None
 
-# Scrape latest draw from euromillones.com HTML
-def scrape_latest_draw(soup):
-    # Find the latest result block
-    result = soup.find('div', class_='latest-result')
-    if not result:
-        return None
-
-    # Date
-    date_text = result.find('h3').get_text(strip=True)  # e.g. "Tuesday, 04 November 2025"
-    try:
-        draw_date = datetime.strptime(date_text, '%A, %d %B %Y').strftime('%Y-%m-%d')
-    except Exception:
-        return None
-
-    # Numbers and stars
-    balls = result.find_all('div', class_='ball')
-    numbers = []
-    stars = []
-    for b in balls:
-        txt = b.get_text(strip=True)
-        if 'star' in b.get('class', []):
-            stars.append(int(txt))
-        else:
-            numbers.append(int(txt))
-    if len(numbers) != 5 or len(stars) != 2:
-        return None
-
-    # Jackpot
-    jackpot = None
-    jackpot_div = result.find('div', class_='jackpot')
-    if jackpot_div:
-        jackpot_text = jackpot_div.get_text(strip=True).replace(',', '').replace('€', '')
-        try:
-            jackpot = int(float(jackpot_text))
-        except Exception:
-            pass
-
-    # Winners table (optional)
-    winners = {}
-    table = result.find('table')
-    if table:
-        for row in table.find_all('tr')[1:]:
-            cols = row.find_all('td')
-            if len(cols) >= 3:
-                rank = cols[0].get_text(strip=True)
-                count = cols[1].get_text(strip=True)
-                prize = cols[2].get_text(strip=True)
-                try:
-                    winners[rank] = int(count)
-                except Exception:
-                    pass
-
-    return {
-        "draw_date": draw_date,
-        "numbers": numbers,
-        "stars": stars,
-        "jackpot": jackpot,
-        "winners": winners
-    }
-
 @app.route('/api/latest')
 def latest_draw():
     row = get_latest_draw()
