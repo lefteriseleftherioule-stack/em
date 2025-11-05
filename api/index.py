@@ -304,10 +304,11 @@ try:
         logging.info(f"Fetching data from {source_url}")
 
         try:
-            resp = requests.get(source_url, timeout=10)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'lxml')
-            logging.info("Successfully fetched and parsed source HTML.")
+        resp = requests.get(source_url, timeout=10)
+        resp.raise_for_status()
+        # Use built-in HTML parser to avoid lxml dependency issues in serverless.
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        logging.info("Successfully fetched and parsed source HTML.")
         except Exception as e:
             logging.error(f"Failed to fetch source: {e}")
             return jsonify({"error": f"Failed to fetch source: {e}"}), 502
