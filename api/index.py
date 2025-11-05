@@ -1,15 +1,33 @@
+# Add a print at the very top to confirm the file is loaded.
+print("DEBUG: api/index.py is being loaded.", flush=True)
+
 import logging
 logging.basicConfig(level=logging.INFO)
 
 try:
+    print("DEBUG: Attempting to import Flask...", flush=True)
     from flask import Flask, jsonify, request
+    print("DEBUG: Flask imported successfully.", flush=True)
+
     import os
     import json
     from datetime import datetime
+
+    print("DEBUG: Attempting to import dotenv...", flush=True)
     from dotenv import load_dotenv
+    print("DEBUG: dotenv imported successfully.", flush=True)
+
+    print("DEBUG: Attempting to import requests...", flush=True)
     import requests
+    print("DEBUG: requests imported successfully.", flush=True)
+
+    print("DEBUG: Attempting to import BeautifulSoup...", flush=True)
     from bs4 import BeautifulSoup
+    print("DEBUG: BeautifulSoup imported successfully.", flush=True)
+
+    print("DEBUG: Attempting to import db module...", flush=True)
     from db import ensure_schema, get_draws as db_get_draws, upsert_draw, get_latest_draw
+    print("DEBUG: db module imported successfully.", flush=True)
 
     # Load environment variables
     load_dotenv()
