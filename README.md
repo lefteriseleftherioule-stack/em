@@ -94,31 +94,13 @@ This project uses Vercel Cron to trigger updates on draw days (Tuesday and Frida
 
 ### EURO_SOURCE_URL expected formats
 
-Either provide the native format:
+The sync now **scrapes** the latest draw from the configured HTML page (`EURO_SOURCE_URL`) instead of expecting JSON.
+Parsing supports the structure used by `https://www.euromillones.com/en/results/euromillions`:
+- Draw date from the latest-result heading
+- Numbers and stars from ball elements
+- Jackpot and winner counts when present
 
-```
-{
-  "draw_date": "2025-01-03",
-  "numbers": [1,2,3,4,5],
-  "stars": [1,2],
-  "jackpot": 30000000,
-  "winners": {"rank1": 0}
-}
-```
-
-Or a common alternative format:
-
-```
-{
-  "date": "2025-01-03T21:00:00Z",
-  "mainNumbers": [1,2,3,4,5],
-  "luckyStars": [1,2],
-  "prize": 30000000,
-  "winners": {"rank1": 0}
-}
-```
-
-If the source returns a list, the last element is used.
+If you prefer a JSON feed, replace the scraper (`scrape_latest_draw`) with your own fetch/normalize logic.
 
 ## Database Setup
 
