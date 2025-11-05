@@ -3,6 +3,8 @@ import os
 import json
 from datetime import datetime
 from dotenv import load_dotenv
+import requests
+from db import ensure_schema, get_draws as db_get_draws, upsert_draw, get_latest_draw
 
 # Load environment variables
 load_dotenv()
@@ -74,10 +76,34 @@ def home():
 
 @app.route('/api/draws')
 def get_draws():
-    return jsonify({
-        "data": MOCK_DRAWS,
-        "count": len(MOCK_DRAWS)
-    })
+    # Optional filters: year, limit
+    year_param = request.args.get('year')
+    limit_param = request.args.get('limit')
+    try:
+        year = int(year_param) if year_param else None
+    except ValueError:
+        year = None
+    try:
+        limit = int(limit_param) if limit_param else None
+    except ValueError:
+        limit = None
+
+    # Try DB first
+    draws = db_get_draws(limit=limit, year=year)
+    if draws:
+        # Normalize date for JSON
+        normalized = []
+        for d in draws:
+            nd = dict(d)
+            if isinstance(nd.get('draw_date'), (datetime,)):
+                nd['draw_date'] = nd['draw_date'].strftime('%Y-%m-%d')
+            elif nd.get('draw_date') and hasattr(nd.get('draw_date'), 'isoformat'):
+                nd['draw_date'] = nd['draw_date'].isoformat()
+            normalized.append(nd)
+        return jsonify({"data": normalized, "count": len(normalized)})
+
+    # Fallback to mock if DB empty or unavailable
+    return jsonify({"data": MOCK_DRAWS, "count": len(MOCK_DRAWS)})
 
 @app.route('/api/draws/<int:draw_id>')
 def get_draw_by_id(draw_id):
@@ -104,3 +130,83 @@ def get_stats():
         "least_frequent_stars": [1, 10],
         "total_draws": len(MOCK_DRAWS)
     })
+
+# Helper to normalize payload from EURO_SOURCE_URL into our schema
+def normalize_euro_payload(payload):
+    # If already in our format
+    if all(k in payload for k in ["draw_date", "numbers", "stars"]):
+        return {
+            "draw_date": payload.get("draw_date"),
+            "numbers": payload.get("numbers", []),
+            "stars": payload.get("stars", []),
+            "jackpot": payload.get("jackpot"),
+            "winners": payload.get("winners", {})
+        }
+    # Try common alternative keys
+    date = payload.get("date") or payload.get("drawDate")
+    numbers = payload.get("mainNumbers") or payload.get("numbers") or []
+    stars = payload.get("luckyStars") or payload.get("stars") or []
+    jackpot = payload.get("jackpot") or payload.get("prize")
+    winners = payload.get("winners") or {}
+    if date and numbers and stars:
+        # Normalize date to YYYY-MM-DD if possible
+        try:
+            # Attempt ISO parsing
+            dt = datetime.fromisoformat(date.replace('Z',''))
+            date = dt.strftime('%Y-%m-%d')
+        except Exception:
+            # Leave as-is
+            pass
+        return {
+            "draw_date": date,
+            "numbers": numbers,
+            "stars": stars,
+            "jackpot": jackpot,
+            "winners": winners,
+        }
+    return None
+
+@app.route('/api/latest')
+def latest_draw():
+    row = get_latest_draw()
+    if row:
+        d = dict(row)
+        if isinstance(d.get('draw_date'), (datetime,)):
+            d['draw_date'] = d['draw_date'].strftime('%Y-%m-%d')
+        elif d.get('draw_date') and hasattr(d.get('draw_date'), 'isoformat'):
+            d['draw_date'] = d['draw_date'].isoformat()
+        return jsonify({"data": d})
+    # Fallback to last mock
+    if MOCK_DRAWS:
+        return jsonify({"data": MOCK_DRAWS[-1]})
+    return jsonify({"error": "No draws available"}), 404
+
+@app.route('/api/sync', methods=['GET', 'POST'])
+def sync_latest():
+    # Ensure schema exists
+    ensure_schema()
+
+    source_url = os.getenv('EURO_SOURCE_URL')
+    if not source_url:
+        return jsonify({"error": "EURO_SOURCE_URL not configured"}), 500
+
+    try:
+        resp = requests.get(source_url, timeout=15)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch source: {e}"}), 502
+
+    # If payload is a list, take the latest element
+    if isinstance(payload, list) and payload:
+        payload = payload[-1]
+
+    normalized = normalize_euro_payload(payload)
+    if not normalized:
+        return jsonify({"error": "Unrecognized payload format"}), 422
+
+    ok = upsert_draw(normalized)
+    if not ok:
+        return jsonify({"error": "Failed to persist draw"}), 500
+
+    return jsonify({"status": "ok", "upserted": normalized.get("draw_date")})
