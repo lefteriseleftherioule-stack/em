@@ -12,13 +12,19 @@ def get_db_connection():
     Create a database connection using environment variables
     """
     try:
+        dsn = os.getenv('DATABASE_URL')
+        if not dsn:
+            print("Error: DATABASE_URL is not set.", flush=True)
+            return None
+        # Neon typically requires SSL; force sslmode=require if not present in DSN.
         conn = psycopg2.connect(
-            os.getenv('DATABASE_URL'),
-            cursor_factory=RealDictCursor
+            dsn,
+            cursor_factory=RealDictCursor,
+            sslmode='require'
         )
         return conn
     except Exception as e:
-        print(f"Error connecting to database: {e}")
+        print(f"Error connecting to database: {e}", flush=True)
         return None
 
 def get_draws(limit=None, year=None):
