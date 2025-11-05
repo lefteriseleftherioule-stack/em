@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
+from bs4 import BeautifulSoup
 from db import ensure_schema, get_draws as db_get_draws, upsert_draw, get_latest_draw
 
 # Load environment variables
@@ -166,6 +167,66 @@ def normalize_euro_payload(payload):
         }
     return None
 
+# Scrape latest draw from euromillones.com HTML
+def scrape_latest_draw(soup):
+    # Find the latest result block
+    result = soup.find('div', class_='latest-result')
+    if not result:
+        return None
+
+    # Date
+    date_text = result.find('h3').get_text(strip=True)  # e.g. "Tuesday, 04 November 2025"
+    try:
+        draw_date = datetime.strptime(date_text, '%A, %d %B %Y').strftime('%Y-%m-%d')
+    except Exception:
+        return None
+
+    # Numbers and stars
+    balls = result.find_all('div', class_='ball')
+    numbers = []
+    stars = []
+    for b in balls:
+        txt = b.get_text(strip=True)
+        if 'star' in b.get('class', []):
+            stars.append(int(txt))
+        else:
+            numbers.append(int(txt))
+    if len(numbers) != 5 or len(stars) != 2:
+        return None
+
+    # Jackpot
+    jackpot = None
+    jackpot_div = result.find('div', class_='jackpot')
+    if jackpot_div:
+        jackpot_text = jackpot_div.get_text(strip=True).replace(',', '').replace('€', '')
+        try:
+            jackpot = int(float(jackpot_text))
+        except Exception:
+            pass
+
+    # Winners table (optional)
+    winners = {}
+    table = result.find('table')
+    if table:
+        for row in table.find_all('tr')[1:]:
+            cols = row.find_all('td')
+            if len(cols) >= 3:
+                rank = cols[0].get_text(strip=True)
+                count = cols[1].get_text(strip=True)
+                prize = cols[2].get_text(strip=True)
+                try:
+                    winners[rank] = int(count)
+                except Exception:
+                    pass
+
+    return {
+        "draw_date": draw_date,
+        "numbers": numbers,
+        "stars": stars,
+        "jackpot": jackpot,
+        "winners": winners
+    }
+
 @app.route('/api/latest')
 def latest_draw():
     row = get_latest_draw()
@@ -193,20 +254,17 @@ def sync_latest():
     try:
         resp = requests.get(source_url, timeout=15)
         resp.raise_for_status()
-        payload = resp.json()
+        soup = BeautifulSoup(resp.text, 'lxml')
     except Exception as e:
         return jsonify({"error": f"Failed to fetch source: {e}"}), 502
 
-    # If payload is a list, take the latest element
-    if isinstance(payload, list) and payload:
-        payload = payload[-1]
+    # Scrape latest draw
+    draw = scrape_latest_draw(soup)
+    if not draw:
+        return jsonify({"error": "Could not parse draw from page"}), 422
 
-    normalized = normalize_euro_payload(payload)
-    if not normalized:
-        return jsonify({"error": "Unrecognized payload format"}), 422
-
-    ok = upsert_draw(normalized)
+    ok = upsert_draw(draw)
     if not ok:
         return jsonify({"error": "Failed to persist draw"}), 500
 
-    return jsonify({"status": "ok", "upserted": normalized.get("draw_date")})
+    return jsonify({"status": "ok", "upserted": draw.get("draw_date")})
