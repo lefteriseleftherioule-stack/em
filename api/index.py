@@ -34,7 +34,7 @@ def health():
 @app.route('/api/draws')
 def get_draws():
     try:
-        from db import get_draws as db_get_draws
+        from .db import get_draws as db_get_draws
         year_param = request.args.get('year')
         limit_param = request.args.get('limit')
         try:
@@ -64,7 +64,7 @@ def get_draws():
 @app.route('/api/latest')
 def latest_draw():
     try:
-        from db import get_latest_draw
+        from .db import get_latest_draw
         row = get_latest_draw()
         if row:
             d = dict(row)
@@ -147,7 +147,7 @@ def scrape_latest_draw(soup):
 @app.route('/api/sync', methods=['GET', 'POST'])
 def sync_latest():
     try:
-        from db import ensure_schema, upsert_draw
+        from .db import ensure_schema, upsert_draw
         ensure_schema()
 
         source_url = os.getenv('EURO_SOURCE_URL')
