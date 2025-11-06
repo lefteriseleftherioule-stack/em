@@ -207,8 +207,14 @@ def sync_latest():
         import requests
         from bs4 import BeautifulSoup
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; EuromillionsAPI/1.0)"}
-            resp = requests.get(source_url, timeout=10, headers=headers)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+            }
+            resp = requests.get(source_url, timeout=15, headers=headers)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, 'html.parser')
         except Exception as e:
