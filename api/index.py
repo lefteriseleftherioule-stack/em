@@ -1,69 +1,81 @@
 from flask import Flask, jsonify, request
 import os
-import json
+import traceback
 from datetime import datetime
-from dotenv import load_dotenv
-import requests
-from bs4 import BeautifulSoup
-from db import ensure_schema, get_draws as db_get_draws, upsert_draw, get_latest_draw
-
-load_dotenv()
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    from db import get_latest_draw
     return jsonify({
         "message": "Welcome to Euromillions API",
         "version": "1.0.0",
         "endpoints": {
             "draws": "/api/draws",
             "latest": "/api/latest",
-            "sync": "/api/sync"
+            "sync": "/api/sync",
+            "health": "/api/health"
         }
     })
 
+@app.route('/api/health')
+def health():
+    try:
+        import sys
+        present_env = [k for k in ("DATABASE_URL", "EURO_SOURCE_URL") if os.getenv(k)]
+        return jsonify({
+            "status": "ok",
+            "python_version": sys.version,
+            "env_present": present_env,
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 @app.route('/api/draws')
 def get_draws():
-    from db import get_draws as db_get_draws
-    year_param = request.args.get('year')
-    limit_param = request.args.get('limit')
     try:
-        year = int(year_param) if year_param else None
-    except ValueError:
-        year = None
-    try:
-        limit = int(limit_param) if limit_param else None
-    except ValueError:
-        limit = None
+        from db import get_draws as db_get_draws
+        year_param = request.args.get('year')
+        limit_param = request.args.get('limit')
+        try:
+            year = int(year_param) if year_param else None
+        except ValueError:
+            year = None
+        try:
+            limit = int(limit_param) if limit_param else None
+        except ValueError:
+            limit = None
 
-    draws = db_get_draws(limit=limit, year=year)
-    if draws:
-        normalized = []
-        for d in draws:
-            nd = dict(d)
-            if isinstance(nd.get('draw_date'), (datetime,)):
-                nd['draw_date'] = nd['draw_date'].strftime('%Y-%m-%d')
-            elif nd.get('draw_date') and hasattr(nd.get('draw_date'), 'isoformat'):
-                nd['draw_date'] = nd['draw_date'].isoformat()
-            normalized.append(nd)
-        return jsonify({"data": normalized, "count": len(normalized)})
-
-    return jsonify({"data": [], "count": 0})
+        draws = db_get_draws(limit=limit, year=year)
+        if draws:
+            normalized = []
+            for d in draws:
+                nd = dict(d)
+                if isinstance(nd.get('draw_date'), (datetime,)):
+                    nd['draw_date'] = nd['draw_date'].strftime('%Y-%m-%d')
+                elif nd.get('draw_date') and hasattr(nd.get('draw_date'), 'isoformat'):
+                    nd['draw_date'] = nd['draw_date'].isoformat()
+                normalized.append(nd)
+            return jsonify({"data": normalized, "count": len(normalized)})
+        return jsonify({"data": [], "count": 0})
+    except Exception as e:
+        return jsonify({"error": "Failed to fetch draws", "detail": str(e), "trace": traceback.format_exc()}), 500
 
 @app.route('/api/latest')
 def latest_draw():
-    from db import get_latest_draw
-    row = get_latest_draw()
-    if row:
-        d = dict(row)
-        if isinstance(d.get('draw_date'), (datetime,)):
-            d['draw_date'] = d['draw_date'].strftime('%Y-%m-%d')
-        elif d.get('draw_date') and hasattr(d.get('draw_date'), 'isoformat'):
-            d['draw_date'] = d['draw_date'].isoformat()
-        return jsonify({"data": d})
-    return jsonify({"error": "No draws available"}), 404
+    try:
+        from db import get_latest_draw
+        row = get_latest_draw()
+        if row:
+            d = dict(row)
+            if isinstance(d.get('draw_date'), (datetime,)):
+                d['draw_date'] = d['draw_date'].strftime('%Y-%m-%d')
+            elif d.get('draw_date') and hasattr(d.get('draw_date'), 'isoformat'):
+                d['draw_date'] = d['draw_date'].isoformat()
+            return jsonify({"data": d})
+        return jsonify({"error": "No draws available"}), 404
+    except Exception as e:
+        return jsonify({"error": "Failed to get latest draw", "detail": str(e), "trace": traceback.format_exc()}), 500
 
 def scrape_latest_draw(soup):
     result = soup.find('div', class_='latest-result')
@@ -134,26 +146,31 @@ def scrape_latest_draw(soup):
 
 @app.route('/api/sync', methods=['GET', 'POST'])
 def sync_latest():
-    from db import ensure_schema, upsert_draw
-    ensure_schema()
-
-    source_url = os.getenv('EURO_SOURCE_URL')
-    if not source_url:
-        return jsonify({"error": "EURO_SOURCE_URL not configured"}), 500
-
     try:
-        resp = requests.get(source_url, timeout=10)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, 'html.parser')
+        from db import ensure_schema, upsert_draw
+        ensure_schema()
+
+        source_url = os.getenv('EURO_SOURCE_URL')
+        if not source_url:
+            return jsonify({"error": "EURO_SOURCE_URL not configured"}), 500
+
+        import requests
+        from bs4 import BeautifulSoup
+        try:
+            resp = requests.get(source_url, timeout=10)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, 'html.parser')
+        except Exception as e:
+            return jsonify({"error": f"Failed to fetch source: {e}"}), 502
+
+        draw = scrape_latest_draw(soup)
+        if not draw:
+            return jsonify({"error": "Could not parse draw from page"}), 422
+
+        ok = upsert_draw(draw)
+        if not ok:
+            return jsonify({"error": "Failed to persist draw"}), 500
+
+        return jsonify({"status": "ok", "upserted": draw.get("draw_date")})
     except Exception as e:
-        return jsonify({"error": f"Failed to fetch source: {e}"}), 502
-
-    draw = scrape_latest_draw(soup)
-    if not draw:
-        return jsonify({"error": "Could not parse draw from page"}), 422
-
-    ok = upsert_draw(draw)
-    if not ok:
-        return jsonify({"error": "Failed to persist draw"}), 500
-
-    return jsonify({"status": "ok", "upserted": draw.get("draw_date")})
+        return jsonify({"error": "Sync failed", "detail": str(e), "trace": traceback.format_exc()}), 500
