@@ -110,6 +110,9 @@ def parse_draw_from_page(html_content):
     # This should be 5 numbers (6,9,25,28,45) and 2 stars (1,4)
     # Looking at the HTML, the numbers appear to be in the main content area
     
+    numbers = None
+    stars = None
+    
     # First, try to find the concatenated number pattern
     concatenated_pattern = r'(\d{7,12})'
     concat_match = re.search(concatenated_pattern, html_content)
@@ -195,6 +198,26 @@ def parse_draw_from_page(html_content):
     if len(valid_main_numbers) >= 5 and len(valid_stars) >= 2:
         numbers = valid_main_numbers[:5]
         stars = valid_stars[:2]
+    else:
+        # If we don't have enough valid numbers, try a more aggressive approach
+        # Look for the specific pattern that might contain the draw results
+        # Sometimes numbers are embedded in longer strings
+        all_digits = re.findall(r'\d', html_content)
+        if len(all_digits) >= 7:  # At least 5 numbers + 2 stars
+            # Try to extract from the digit sequence
+            potential_numbers = [int(d) for d in all_digits]
+            # Filter for valid ranges
+            main_from_digits = [n for n in potential_numbers if 1 <= n <= 50][:5]
+            stars_from_digits = [n for n in potential_numbers if 1 <= n <= 12][:2]
+            
+            if len(main_from_digits) == 5 and len(stars_from_digits) == 2:
+                numbers = main_from_digits
+                stars = stars_from_digits
+            else:
+                # Last resort: return None if we can't get valid numbers
+                return None
+        else:
+            return None
 
     return {
         "draw_date": draw_date,
@@ -221,7 +244,14 @@ def sync_latest():
 
 
         if not draw:
-            return jsonify({"error": "Could not parse draw from page", "html": resp.text}), 422
+            # Add some debugging information
+            debug_info = {
+                "error": "Could not parse draw from page",
+                "html_preview": resp.text[:500] + "..." if len(resp.text) > 500 else resp.text,
+                "html_length": len(resp.text),
+                "url": source_url
+            }
+            return jsonify(debug_info), 422
 
         ok = upsert_draw(draw)
         if not ok:
