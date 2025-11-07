@@ -86,29 +86,115 @@ from bs4 import BeautifulSoup
 def parse_draw_from_page(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Find the date from the specific span
-    date_tag = soup.find('span', class_='draw-date-short')
-    if not date_tag:
-        return None
-    
-    date_match = re.search(r'(\d{2}/\d{2}/\d{4})', date_tag.text)
+    # Find the date - it's now in a different format like "Tuesday, 04 November 2025"
+    # Look for text that matches this pattern
+    date_pattern = r'(\w+),\s+(\d{2})\s+(\w+)\s+(\d{4})'
+    date_match = re.search(date_pattern, html_content)
     if not date_match:
         return None
     
-    day, month, year = date_match.group(1).split('/')
+    day = date_match.group(2)
+    month_name = date_match.group(3)
+    year = date_match.group(4)
+    
+    # Convert month name to number
+    month_map = {
+        'January': '01', 'February': '02', 'March': '03', 'April': '04',
+        'May': '05', 'June': '06', 'July': '07', 'August': '08',
+        'September': '09', 'October': '10', 'November': '11', 'December': '12'
+    }
+    month = month_map.get(month_name, '01')
     draw_date = f"{year}-{month}-{day}"
 
-    # Find the balls container
-    balls_container = soup.find('div', class_='balls-container')
-    if not balls_container:
-        return None
-
-    # Find numbers and stars from the specific spans
-    numbers = [int(span.text) for span in balls_container.find_all('span', class_='ball')]
-    stars = [int(span.text) for span in balls_container.find_all('span', class_='lucky-star')]
+    # Find the numbers - they're now concatenated in text like "6925284514"
+    # This should be 5 numbers (6,9,25,28,45) and 2 stars (1,4)
+    # Looking at the HTML, the numbers appear to be in the main content area
     
-    if not numbers or not stars:
-        return None
+    # First, try to find the concatenated number pattern
+    concatenated_pattern = r'(\d{7,12})'
+    concat_match = re.search(concatenated_pattern, html_content)
+    
+    if concat_match:
+        concat_str = concat_match.group(1)
+        # Try to split this concatenated string intelligently
+        # For "6925284514" we want [6,9,25,28,45] and stars [1,4]
+        
+        def split_concatenated_numbers(s):
+            # Try different splitting strategies for EuroMillions numbers
+            numbers = []
+            stars = []
+            
+            # Strategy: try to split by looking for valid number ranges
+            # EuroMillions main numbers: 1-50, stars: 1-12
+            
+            # Try splitting at different positions
+            possible_splits = []
+            
+            # Try splitting as single digits first
+            if len(s) >= 7:
+                single_digit_split = [int(s[i]) for i in range(len(s))]
+                # Check if we have exactly 7 numbers (5 main + 2 stars)
+                if len(single_digit_split) == 7:
+                    main_nums = single_digit_split[:5]
+                    star_nums = single_digit_split[5:]
+                    if all(1 <= n <= 50 for n in main_nums) and all(1 <= n <= 12 for n in star_nums):
+                        return main_nums, star_nums
+            
+            # Try splitting with some 2-digit numbers
+            # This is more complex - let's try a few common patterns
+            
+            # Look for the pattern in the specific HTML section
+            # The numbers might be in a specific div or section
+            main_content = re.search(r'Latest Result.*?((?:\d+\s*)+)', html_content, re.DOTALL)
+            if main_content:
+                numbers_text = main_content.group(1)
+                all_nums_in_section = re.findall(r'\d+', numbers_text)
+                
+                # Filter for valid EuroMillions numbers
+                valid_main = []
+                valid_stars = []
+                
+                for num_str in all_nums_in_section:
+                    num = int(num_str)
+                    if 1 <= num <= 50 and len(valid_main) < 5:
+                        valid_main.append(num)
+                    elif 1 <= num <= 12 and len(valid_stars) < 2:
+                        valid_stars.append(num)
+                
+                if len(valid_main) == 5 and len(valid_stars) == 2:
+                    return valid_main, valid_stars
+            
+            return None, None
+        
+        numbers, stars = split_concatenated_numbers(concat_str)
+        if numbers and stars:
+            return {
+                "draw_date": draw_date,
+                "numbers": numbers,
+                "stars": stars,
+                "jackpot": None,
+                "winners": None
+            }
+    
+    # Fallback: find all numbers in the HTML content
+    all_numbers = re.findall(r'\b\d+\b', html_content)
+    
+    # Filter for valid EuroMillions numbers
+    # Main numbers: 1-50, Stars: 1-12
+    valid_main_numbers = []
+    valid_stars = []
+    
+    for num_str in all_numbers:
+        num = int(num_str)
+        if 1 <= num <= 50:
+            valid_main_numbers.append(num)
+        elif 1 <= num <= 12:
+            valid_stars.append(num)
+    
+    # We need exactly 5 main numbers and 2 stars
+    if len(valid_main_numbers) >= 5 and len(valid_stars) >= 2:
+        numbers = valid_main_numbers[:5]
+        stars = valid_stars[:2]
 
     return {
         "draw_date": draw_date,
