@@ -106,118 +106,182 @@ def parse_draw_from_page(html_content):
     month = month_map.get(month_name, '01')
     draw_date = f"{year}-{month}-{day}"
 
-    # Find the numbers - they're now concatenated in text like "6925284514"
-    # This should be 5 numbers (6,9,25,28,45) and 2 stars (1,4)
-    # Looking at the HTML, the numbers appear to be in the main content area
+    # Find the numbers - they're now in a different format
+    # Let's look for numbers more intelligently by searching for specific patterns
     
+    # Look for numbers in the main content area
+    # Try to find a section that contains the draw results
+    
+    # Look for patterns that might contain the numbers
+    # EuroMillions has 5 main numbers (1-50) and 2 stars (1-12)
+    
+    # Try to find numbers in various formats
     numbers = None
     stars = None
     
-    # First, try to find the concatenated number pattern
-    concatenated_pattern = r'(\d{7,12})'
-    concat_match = re.search(concatenated_pattern, html_content)
+    # Strategy 1: Look for numbers in the format of actual EuroMillions results
+    # Search for patterns like "6, 9, 25, 28, 45" and "1, 4" for stars
     
-    if concat_match:
-        concat_str = concat_match.group(1)
-        # Try to split this concatenated string intelligently
-        # For "6925284514" we want [6,9,25,28,45] and stars [1,4]
+    # Look for number sequences that could be EuroMillions numbers
+    number_patterns = [
+        r'(\d{1,2})\s*,\s*(\d{1,2})\s*,\s*(\d{1,2})\s*,\s*(\d{1,2})\s*,\s*(\d{1,2})',  # 5 numbers
+        r'(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})',  # 5 numbers separated by spaces
+    ]
+    
+    star_patterns = [
+        r'Stars?\s*:?\s*(\d{1,2})\s*,\s*(\d{1,2})',  # Stars: 1, 4
+        r'(\d{1,2})\s*,\s*(\d{1,2})\s*Stars?',  # 1, 4 Stars
+        r'(\d{1,2})\s+(\d{1,2})\s*Stars?',  # 1 4 Stars
+    ]
+    
+    # Try to find main numbers
+    for pattern in number_patterns:
+        match = re.search(pattern, html_content, re.IGNORECASE)
+        if match:
+            potential_numbers = [int(match.group(i)) for i in range(1, 6)]
+            # Validate EuroMillions rules
+            if all(1 <= n <= 50 for n in potential_numbers):
+                numbers = potential_numbers
+                break
+    
+    # Try to find stars
+    for pattern in star_patterns:
+        match = re.search(pattern, html_content, re.IGNORECASE)
+        if match:
+            potential_stars = [int(match.group(1)), int(match.group(2))]
+            # Validate EuroMillions star rules
+            if all(1 <= s <= 12 for s in potential_stars):
+                stars = potential_stars
+                break
+    
+    # Strategy 2: If we didn't find structured numbers, look for all numbers in a specific section
+    if not numbers or not stars:
+        # Look for the main content area that might contain the numbers
+        # Try to find a section with "Latest Result" or similar
         
-        def split_concatenated_numbers(s):
-            # Try different splitting strategies for EuroMillions numbers
-            numbers = []
-            stars = []
+        # Find all numbers in the HTML
+        all_numbers = re.findall(r'\b([1-9]|[1-4]\d|50)\b', html_content)  # 1-50
+        all_stars = re.findall(r'\b([1-9]|1[0-2])\b', html_content)  # 1-12
+        
+        # Convert to integers and remove duplicates while preserving order
+        seen_numbers = set()
+        unique_numbers = []
+        for num_str in all_numbers:
+            num = int(num_str)
+            if num not in seen_numbers:
+                seen_numbers.add(num)
+                unique_numbers.append(num)
+        
+        seen_stars = set()
+        unique_stars = []
+        for star_str in all_stars:
+            star = int(star_str)
+            if star not in seen_stars:
+                seen_stars.add(star)
+                unique_stars.append(star)
+        
+        # Take the first 5 numbers and 2 stars
+        if len(unique_numbers) >= 5:
+            numbers = unique_numbers[:5]
+        if len(unique_stars) >= 2:
+            stars = unique_stars[:2]
+    
+    # Strategy 3: Last resort - look for the concatenated pattern but split it properly
+    if not numbers or not stars:
+        # Look for long digit sequences that might be concatenated numbers
+        long_digit_match = re.search(r'(\d{7,15})', html_content)
+        if long_digit_match:
+            digit_sequence = long_digit_match.group(1)
             
-            # Strategy: try to split by looking for valid number ranges
-            # EuroMillions main numbers: 1-50, stars: 1-12
+            # Try to split this intelligently
+            # For a sequence like "6925284514", we want to find valid splits
             
-            # Try splitting at different positions
+            # Try different ways to split into valid EuroMillions numbers
             possible_splits = []
             
-            # Try splitting as single digits first
-            if len(s) >= 7:
-                single_digit_split = [int(s[i]) for i in range(len(s))]
-                # Check if we have exactly 7 numbers (5 main + 2 stars)
-                if len(single_digit_split) == 7:
-                    main_nums = single_digit_split[:5]
-                    star_nums = single_digit_split[5:]
-                    if all(1 <= n <= 50 for n in main_nums) and all(1 <= n <= 12 for n in star_nums):
-                        return main_nums, star_nums
-            
-            # Try splitting with some 2-digit numbers
-            # This is more complex - let's try a few common patterns
-            
-            # Look for the pattern in the specific HTML section
-            # The numbers might be in a specific div or section
-            main_content = re.search(r'Latest Result.*?((?:\d+\s*)+)', html_content, re.DOTALL)
-            if main_content:
-                numbers_text = main_content.group(1)
-                all_nums_in_section = re.findall(r'\d+', numbers_text)
-                
-                # Filter for valid EuroMillions numbers
-                valid_main = []
-                valid_stars = []
-                
-                for num_str in all_nums_in_section:
-                    num = int(num_str)
-                    if 1 <= num <= 50 and len(valid_main) < 5:
-                        valid_main.append(num)
-                    elif 1 <= num <= 12 and len(valid_stars) < 2:
-                        valid_stars.append(num)
-                
-                if len(valid_main) == 5 and len(valid_stars) == 2:
-                    return valid_main, valid_stars
-            
-            return None, None
-        
-        numbers, stars = split_concatenated_numbers(concat_str)
-        if numbers and stars:
-            return {
-                "draw_date": draw_date,
-                "numbers": numbers,
-                "stars": stars,
-                "jackpot": None,
-                "winners": None
-            }
+            # Try splitting as: single digits, then 2-digit numbers
+            for split_point in range(1, len(digit_sequence)):
+                try:
+                    # Try different combinations
+                    numbers_part = digit_sequence[:split_point]
+                    stars_part = digit_sequence[split_point:]
+                    
+                    # Parse the numbers part
+                    if len(numbers_part) >= 5:  # Need at least 5 numbers
+                        # Try to extract 5 numbers from the sequence
+                        main_nums = []
+                        remaining = numbers_part
+                        
+                        # Try to extract 5 valid numbers (1-50)
+                        for i in range(5):
+                            if not remaining:
+                                break
+                            
+                            # Try 2-digit first, then 1-digit
+                            if len(remaining) >= 2:
+                                two_digit = int(remaining[:2])
+                                if 1 <= two_digit <= 50:
+                                    main_nums.append(two_digit)
+                                    remaining = remaining[2:]
+                                else:
+                                    # Try 1-digit
+                                    one_digit = int(remaining[0])
+                                    if 1 <= one_digit <= 50:
+                                        main_nums.append(one_digit)
+                                        remaining = remaining[1:]
+                                    else:
+                                        break
+                            else:
+                                # Only 1 digit left
+                                one_digit = int(remaining[0])
+                                if 1 <= one_digit <= 50:
+                                    main_nums.append(one_digit)
+                                    remaining = remaining[1:]
+                                else:
+                                    break
+                        
+                        # Parse stars part
+                        star_nums = []
+                        remaining_stars = stars_part
+                        
+                        for i in range(2):
+                            if not remaining_stars:
+                                break
+                            
+                            if len(remaining_stars) >= 2:
+                                two_digit = int(remaining_stars[:2])
+                                if 1 <= two_digit <= 12:
+                                    star_nums.append(two_digit)
+                                    remaining_stars = remaining_stars[2:]
+                                else:
+                                    one_digit = int(remaining_stars[0])
+                                    if 1 <= one_digit <= 12:
+                                        star_nums.append(one_digit)
+                                        remaining_stars = remaining_stars[1:]
+                                    else:
+                                        break
+                            else:
+                                one_digit = int(remaining_stars[0])
+                                if 1 <= one_digit <= 12:
+                                    star_nums.append(one_digit)
+                                    remaining_stars = remaining_stars[1:]
+                                else:
+                                    break
+                        
+                        if len(main_nums) == 5 and len(star_nums) == 2:
+                            numbers = main_nums
+                            stars = star_nums
+                            break
+                            
+                except (ValueError, IndexError):
+                    continue
     
-    # Fallback: find all numbers in the HTML content
-    all_numbers = re.findall(r'\b\d+\b', html_content)
+    # Final validation
+    if not numbers or not stars or len(numbers) != 5 or len(stars) != 2:
+        return None
     
-    # Filter for valid EuroMillions numbers
-    # Main numbers: 1-50, Stars: 1-12
-    valid_main_numbers = []
-    valid_stars = []
-    
-    for num_str in all_numbers:
-        num = int(num_str)
-        if 1 <= num <= 50:
-            valid_main_numbers.append(num)
-        elif 1 <= num <= 12:
-            valid_stars.append(num)
-    
-    # We need exactly 5 main numbers and 2 stars
-    if len(valid_main_numbers) >= 5 and len(valid_stars) >= 2:
-        numbers = valid_main_numbers[:5]
-        stars = valid_stars[:2]
-    else:
-        # If we don't have enough valid numbers, try a more aggressive approach
-        # Look for the specific pattern that might contain the draw results
-        # Sometimes numbers are embedded in longer strings
-        all_digits = re.findall(r'\d', html_content)
-        if len(all_digits) >= 7:  # At least 5 numbers + 2 stars
-            # Try to extract from the digit sequence
-            potential_numbers = [int(d) for d in all_digits]
-            # Filter for valid ranges
-            main_from_digits = [n for n in potential_numbers if 1 <= n <= 50][:5]
-            stars_from_digits = [n for n in potential_numbers if 1 <= n <= 12][:2]
-            
-            if len(main_from_digits) == 5 and len(stars_from_digits) == 2:
-                numbers = main_from_digits
-                stars = stars_from_digits
-            else:
-                # Last resort: return None if we can't get valid numbers
-                return None
-        else:
-            return None
+    if not all(1 <= n <= 50 for n in numbers) or not all(1 <= s <= 12 for s in stars):
+        return None
 
     return {
         "draw_date": draw_date,
