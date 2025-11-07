@@ -23,7 +23,7 @@ def home():
 def health():
     try:
         import sys
-        present_env = [k for k in ("DATABASE_URL", "EURO_SOURCE_URL") if os.getenv(k)]
+        present_env = [k for k in ("DATABASE_URL",) if os.getenv(k)]
         return jsonify({
             "status": "ok",
             "python_version": sys.version,
