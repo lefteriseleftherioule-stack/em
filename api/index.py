@@ -81,33 +81,62 @@ def latest_draw():
 
 
 
+from bs4 import BeautifulSoup
+
+def parse_draw_from_page(html_content):
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Find the date from the first h2 tag
+    date_tag = soup.find('h2')
+    if not date_tag:
+        return None
+    
+    date_match = re.search(r'(\d{1,2}) (\w+) (\d{4})', date_tag.text)
+    if not date_match:
+        return None
+    
+    day, month_str, year = date_match.groups()
+    month_map = {
+        'January': '01', 'February': '02', 'March': '03', 'April': '04',
+        'May': '05', 'June': '06', 'July': '07', 'August': '08',
+        'September': '09', 'October': '10', 'November': '11', 'December': '12'
+    }
+    month = month_map.get(month_str)
+    if not month:
+        return None
+    
+    draw_date = f"{year}-{month}-{int(day):02d}"
+
+    # Find numbers and stars from the specific ordered list
+    results_list = soup.find('ol', class_='results-list')
+    if not results_list:
+        return None
+    
+    numbers = [int(li.text) for li in results_list.find_all('li', class_='ball')]
+    stars = [int(li.text) for li in results_list.find_all('li', class_='lucky-star')]
+    
+    return {
+        "draw_date": draw_date,
+        "numbers": numbers,
+        "stars": stars,
+        "jackpot": None,
+        "winners": None
+    }
+
 @app.route('/api/sync', methods=['GET', 'POST'])
 def sync_latest():
     try:
         from .db import ensure_schema, upsert_draw
         ensure_schema()
 
-        source_url = "https://euromillions.api.pedromealha.dev/v1/latest"
+        source_url = os.getenv("EURO_SOURCE_URL", "https://www.euro-millions.com/results")
         try:
-            headers = {"Accept": "application/json"}
+            headers = {"Accept": "text/html"}
             resp = requests.get(source_url, timeout=15, headers=headers)
             resp.raise_for_status()
-            latest_draw_data = resp.json()
-            # The API returns a list of draws, we want the first one
-            if isinstance(latest_draw_data.get('draws'), list) and latest_draw_data['draws']:
-                draw_data = latest_draw_data['draws'][0]
-                # Transform the API response to match our database schema
-                draw = {
-                    "draw_date": draw_data.get('date'),
-                    "numbers": [int(n) for n in draw_data.get('numbers', [])],
-                    "stars": [int(s) for s in draw_data.get('stars', [])],
-                    "jackpot": None,  # API does not provide this
-                    "winners": None   # API does not provide this
-                }
-            else:
-                draw = None
+            draw = parse_draw_from_page(resp.text)
         except Exception as e:
-            return jsonify({"error": f"Failed to fetch from API: {e}"}), 502
+            return jsonify({"error": f"Failed to fetch from page: {e}"}), 502
 
 
         if not draw:
