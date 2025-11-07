@@ -84,15 +84,20 @@ def latest_draw():
 from bs4 import BeautifulSoup
 
 def parse_draw_from_page(html_content):
+    # Debug: print the HTML content to see what we're parsing
+    print(f"--- HTML CONTENT ---\n{html_content[:1000]}...\n--- END HTML CONTENT ---")
+
     soup = BeautifulSoup(html_content, 'html.parser')
     
     # Find the date from the specific span
     date_tag = soup.find('span', class_='draw-date-short')
     if not date_tag:
+        print("Debug: Could not find date_tag")
         return None
     
     date_match = re.search(r'(\d{2}/\d{2}/\d{4})', date_tag.text)
     if not date_match:
+        print("Debug: Could not match date")
         return None
     
     day, month, year = date_match.group(1).split('/')
@@ -101,12 +106,17 @@ def parse_draw_from_page(html_content):
     # Find the balls container
     balls_container = soup.find('div', class_='balls-container')
     if not balls_container:
+        print("Debug: Could not find balls_container")
         return None
 
     # Find numbers and stars from the specific spans
     numbers = [int(span.text) for span in balls_container.find_all('span', class_='ball')]
     stars = [int(span.text) for span in balls_container.find_all('span', class_='lucky-star')]
     
+    if not numbers or not stars:
+        print("Debug: Could not find numbers or stars")
+        return None
+
     return {
         "draw_date": draw_date,
         "numbers": numbers,
