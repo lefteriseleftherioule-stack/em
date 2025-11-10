@@ -341,7 +341,7 @@ def parse_draw_from_page(html_content):
         "winners": None
     }
 
-def parse_draw_for_date(html_content, target_date_str):
+def parse_draw_for_date(html_content, target_date_str, collect_debug: bool = False):
     """
     Parse a specific EuroMillions draw for the given ISO date (YYYY-MM-DD)
     from a results page that contains multiple draws.
@@ -425,9 +425,12 @@ def parse_draw_for_date(html_content, target_date_str):
     # initialize defaults early; structured values will short-circuit later branches
     numbers = []
     stars = []
+    provenance = {"source": None, "notes": []}
     if jnums and jstars:
         numbers = jnums
         stars = jstars
+        provenance["source"] = "json_script"
+        provenance["notes"].append("Extracted numbers/stars from embedded JSON script for target date")
 
     weekday = dt.strftime('%A')  # e.g., Tuesday
     day_no = dt.day               # e.g., 4
@@ -641,6 +644,9 @@ def parse_draw_for_date(html_content, target_date_str):
     n1, s1 = extract_from_container(latest_result_container)
     numbers.extend(n1)
     stars.extend(s1)
+    if len(numbers) == 5 and len(stars) == 2 and provenance["source"] is None:
+        provenance["source"] = "container_extraction"
+        provenance["notes"].append("Extracted from container (lists/spans) near date heading")
 
     # If container strategy failed, use text window after the matched date text
     if len(numbers) != 5 or len(stars) != 2:
@@ -683,6 +689,9 @@ def parse_draw_for_date(html_content, target_date_str):
             if len(stars_c) == 2:
                 numbers = mains
                 stars = stars_c
+                if provenance["source"] is None:
+                    provenance["source"] = "token_scan"
+                    provenance["notes"].append("Used sliding window token scan within matched date window")
                 break
 
     # Validate ranges
@@ -691,15 +700,18 @@ def parse_draw_for_date(html_content, target_date_str):
     if not all(1 <= n <= 50 for n in numbers) or not all(1 <= s <= 12 for s in stars):
         return None
 
-    return {
+    result = {
         "draw_date": draw_date,
         "numbers": sorted(numbers),
         "stars": sorted(stars),
         "jackpot": None,
         "winners": None
     }
+    if collect_debug:
+        result["debug"] = provenance
+    return result
 
-def parse_draw_detail_page(html_content, target_date_str):
+def parse_draw_detail_page(html_content, target_date_str, collect_debug: bool = False):
     """
     Parse a single-draw detail page where only one EuroMillions draw is present.
     Tries explicit markup first, then falls back to text token scanning.
@@ -707,6 +719,7 @@ def parse_draw_detail_page(html_content, target_date_str):
     soup = BeautifulSoup(html_content, 'html.parser')
     numbers = []
     stars = []
+    provenance = {"source": None, "notes": []}
 
     # Try extracting structured data from JSON scripts first
     def _extract_structured_result_from_scripts(soup, target_date_str=None):
@@ -785,6 +798,8 @@ def parse_draw_detail_page(html_content, target_date_str):
     if jnums and jstars:
         numbers = jnums
         stars = jstars
+        provenance["source"] = "json_script"
+        provenance["notes"].append("Extracted numbers/stars from embedded JSON script")
 
     # Prefer explicit containers commonly used on detail pages
     container = None
@@ -830,6 +845,9 @@ def parse_draw_detail_page(html_content, target_date_str):
                     stars.append(v)
             if len(stars) >= 2:
                 break
+    if (len(numbers) >= 5 and len(stars) >= 2) and provenance["source"] is None:
+        provenance["source"] = "spans_explicit"
+        provenance["notes"].append("Used explicit span classes for balls/stars")
 
     # Direct list extraction (ul/ol) specifically targeting balls vs stars lists
     if len(numbers) < 5 or len(stars) < 2:
@@ -859,6 +877,9 @@ def parse_draw_detail_page(html_content, target_date_str):
                         svals.append(v)
             if len(svals) >= 2:
                 stars = svals[:2]
+        if (len(numbers) >= 5 and len(stars) >= 2) and provenance["source"] is None:
+            provenance["source"] = "lists_explicit"
+            provenance["notes"].append("Used ul/ol lists with balls and star classes")
 
     # Extract using clusters to avoid picking prize table numbers
     def extract_cluster(parent):
@@ -943,6 +964,9 @@ def parse_draw_detail_page(html_content, target_date_str):
             if len(stars_c) == 2:
                 numbers = mains
                 stars = stars_c
+                if provenance["source"] is None:
+                    provenance["source"] = "token_scan"
+                    provenance["notes"].append("Used sliding window token scan after date heading")
                 break
 
     if len(numbers) != 5 or len(stars) != 2:
@@ -955,13 +979,16 @@ def parse_draw_detail_page(html_content, target_date_str):
         # try to confirm via text patterns, but don't block if not found
         pass
 
-    return {
+    result = {
         "draw_date": draw_date,
         "numbers": sorted(numbers),
         "stars": sorted(stars),
         "jackpot": None,
         "winners": None
     }
+    if collect_debug:
+        result["debug"] = provenance
+    return result
 
 @app.route('/api/sync', methods=['GET', 'POST'])
 def sync_latest():
@@ -1025,7 +1052,7 @@ def sync_date():
         try:
             resp = requests.get(source_url, timeout=(5, 20), headers=headers)
             resp.raise_for_status()
-            draw = parse_draw_for_date(resp.text, target_date)
+            draw = parse_draw_for_date(resp.text, target_date, collect_debug=collect_debug)
         except Exception as e:
             # Don't fail hard here; proceed to fallbacks
             primary_fetch_error = str(e)
@@ -1077,9 +1104,9 @@ def sync_date():
                         if f"/results-history-{year}" in url:
                             # Multi-draw archive page: try date-scoped parser
                             archive_text = r2.text
-                            d2 = parse_draw_for_date(r2.text, target_date)
+                            d2 = parse_draw_for_date(r2.text, target_date, collect_debug=collect_debug)
                         else:
-                            d2 = parse_draw_detail_page(r2.text, target_date)
+                            d2 = parse_draw_detail_page(r2.text, target_date, collect_debug=collect_debug)
                         if d2:
                             draw = d2
                             break
