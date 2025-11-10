@@ -291,11 +291,24 @@ def parse_draw_for_date(html_content, target_date_str):
     month_name = dt.strftime('%B')  # e.g., November
     year = dt.strftime('%Y')
 
-    # Build regexes to find the date heading/content
+    # Build regexes to find the date heading/content (English + Spanish + dd/mm/yyyy)
+    es_days = {
+        'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles',
+        'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
+    }
+    es_months = {
+        'January': 'enero', 'February': 'febrero', 'March': 'marzo', 'April': 'abril',
+        'May': 'mayo', 'June': 'junio', 'July': 'julio', 'August': 'agosto',
+        'September': 'septiembre', 'October': 'octubre', 'November': 'noviembre', 'December': 'diciembre'
+    }
+    weekday_es = es_days.get(weekday, weekday)
+    month_es = es_months.get(month_name, month_name)
     patterns = [
         rf"{weekday},\s+{day_no}(?:st|nd|rd|th)?\s+{month_name}\s+{year}",
         rf"{weekday},\s+{day_no_z}\s+{month_name}\s+{year}",
         rf"{day_no}(?:st|nd|rd|th)?\s+{month_name}\s+{year}",
+        rf"{weekday_es}\s+{day_no}(?:\s+de)?\s+{month_es}\s+de\s+{year}",
+        rf"{day_no}(?:\s+de)?\s+{month_es}\s+de\s+{year}",
         rf"{day_no_z}\/{dt.strftime('%m')}\/{year}",
     ]
 
@@ -370,7 +383,7 @@ def parse_draw_for_date(html_content, target_date_str):
                 if len(local_numbers) >= 5:
                     break
         if len(local_stars) < 2:
-            star_label = container.find(string=re.compile(r'Lucky\s*Stars?', re.I))
+            star_label = container.find(string=re.compile(r'(Lucky\s*Stars?|Estrellas?)', re.I))
             if star_label:
                 parent = star_label.parent if hasattr(star_label, 'parent') else container
                 for sp in parent.find_all_next('span', limit=6):
@@ -398,7 +411,15 @@ def parse_draw_for_date(html_content, target_date_str):
                 break
         if match_idx is None:
             return None
-        window = full_text[match_idx: match_idx + 6000]
+        # Limit the token window to before the next date occurrence to avoid mixing draws
+        any_date_re = re.compile(
+            r"(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Lunes|Martes|Miércoles|Jueves|Viernes|Sábado|Domingo)[^\d]{0,12}\d{1,2}[^\n\r]{0,20}(?:January|February|March|April|May|June|July|August|September|October|November|December|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)[^\n\r]{0,15}\d{4}|\b\d{1,2}\/\d{2}\/\d{4}\b)",
+            re.I
+        )
+        tail_text = full_text[match_idx:]
+        next_m = any_date_re.search(tail_text)
+        end_idx = match_idx + (next_m.start() if next_m else len(full_text))
+        window = full_text[match_idx:end_idx]
         tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', window)]
         # sliding selection: first 5 mains then next 2 stars
         for i in range(0, max(0, len(tokens) - 7)):
@@ -499,7 +520,9 @@ def sync_date():
             return jsonify({
                 "error": "Could not parse target draw from page",
                 "date": target_date,
-                "url": source_url
+                "url": source_url,
+                "html_preview": resp.text[:500] + "..." if len(resp.text) > 500 else resp.text,
+                "html_length": len(resp.text)
             }), 422
 
         ok = upsert_draw(draw)
