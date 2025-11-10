@@ -304,15 +304,27 @@ def parse_draw_for_date(html_content, target_date_str):
     weekday_es = es_days.get(weekday, weekday)
     month_es = es_months.get(month_name, month_name)
     patterns = [
+        # English with weekday, with/without comma
         rf"{weekday},\s+{day_no}(?:st|nd|rd|th)?\s+{month_name}\s+{year}",
+        rf"{weekday}\s+{day_no}(?:st|nd|rd|th)?\s+{month_name}\s+{year}",
         rf"{weekday},\s+{day_no_z}\s+{month_name}\s+{year}",
+        rf"{weekday}\s+{day_no_z}\s+{month_name}\s+{year}",
+        # English without weekday
         rf"{day_no}(?:st|nd|rd|th)?\s+{month_name}\s+{year}",
+        rf"{day_no_z}\s+{month_name}\s+{year}",
+        rf"{day_no}\s+{month_name}\s+{year}",
+        # Spanish variants
         rf"{weekday_es}\s+{day_no}(?:\s+de)?\s+{month_es}\s+de\s+{year}",
         rf"{day_no}(?:\s+de)?\s+{month_es}\s+de\s+{year}",
+        # Numeric day/month/year (2 or 4-digit year)
         rf"{day_no_z}\/{dt.strftime('%m')}\/{year}",
+        rf"{dt.strftime('%d')}\/{dt.strftime('%m')}\/{dt.strftime('%y')}",
+        rf"{day_no}\/{dt.strftime('%m')}\/{year}",
     ]
 
-    # Search headings first
+    # First, look for a <time datetime="YYYY-MM-DD"> element which often denotes the draw
+    time_tag = soup.find('time', attrs={'datetime': target_date_str})
+    # Search headings next
     date_heading = None
     for h in soup.find_all(['h1', 'h2', 'h3']):
         text = h.get_text(strip=True)
@@ -333,7 +345,9 @@ def parse_draw_for_date(html_content, target_date_str):
 
     # Select a container near the heading; otherwise use whole document after the match
     latest_result_container = None
-    if date_heading:
+    if time_tag:
+        latest_result_container = time_tag.find_parent(lambda t: t.name in ['article', 'section', 'div']) or time_tag.parent
+    if date_heading and not latest_result_container:
         latest_result_container = date_heading.find_next(lambda t: t.name in ['section', 'article', 'div'] and t.get_text(strip=True))
         if not latest_result_container:
             latest_result_container = date_heading.parent
@@ -374,12 +388,26 @@ def parse_draw_for_date(html_content, target_date_str):
                         local_stars.append(s)
         # If not enough, scan generic spans and list items within container
         if len(local_numbers) < 5:
+            # scan common inline digit carriers
             for sp in container.find_all(['span', 'li', 'div']):
                 t = sp.get_text(strip=True)
                 if re.fullmatch(r'\d{1,2}', t):
                     v = int(t)
                     if 1 <= v <= 50 and v not in local_numbers:
                         local_numbers.append(v)
+                if len(local_numbers) >= 5:
+                    break
+        if len(local_numbers) < 5:
+            # scan nearby lists for numbers (ul/ol appearing close to the date container)
+            for lst in container.find_all(['ul', 'ol'], limit=3):
+                for li in lst.find_all('li'):
+                    t = li.get_text(strip=True)
+                    if re.fullmatch(r'\d{1,2}', t):
+                        v = int(t)
+                        if 1 <= v <= 50 and v not in local_numbers:
+                            local_numbers.append(v)
+                        if len(local_numbers) >= 5:
+                            break
                 if len(local_numbers) >= 5:
                     break
         if len(local_stars) < 2:
