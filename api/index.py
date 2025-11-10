@@ -274,6 +274,151 @@ def parse_draw_from_page(html_content):
         "winners": None
     }
 
+def parse_draw_for_date(html_content, target_date_str):
+    """
+    Parse a specific EuroMillions draw for the given ISO date (YYYY-MM-DD)
+    from a results page that contains multiple draws.
+    """
+    soup = BeautifulSoup(html_content, 'html.parser')
+    try:
+        dt = datetime.strptime(target_date_str, '%Y-%m-%d')
+    except Exception:
+        return None
+
+    weekday = dt.strftime('%A')  # e.g., Tuesday
+    day_no = dt.day               # e.g., 4
+    day_no_z = f"{day_no:02d}"   # e.g., 04
+    month_name = dt.strftime('%B')  # e.g., November
+    year = dt.strftime('%Y')
+
+    # Build regexes to find the date heading/content
+    patterns = [
+        rf"{weekday},\s+{day_no}(?:st|nd|rd|th)?\s+{month_name}\s+{year}",
+        rf"{weekday},\s+{day_no_z}\s+{month_name}\s+{year}",
+        rf"{day_no}(?:st|nd|rd|th)?\s+{month_name}\s+{year}",
+        rf"{day_no_z}\/{dt.strftime('%m')}\/{year}",
+    ]
+
+    # Search headings first
+    date_heading = None
+    for h in soup.find_all(['h1', 'h2', 'h3']):
+        text = h.get_text(strip=True)
+        if any(re.search(p, text, re.I) for p in patterns):
+            date_heading = h
+            break
+
+    # Select a container near the heading; otherwise use whole document after the match
+    latest_result_container = None
+    if date_heading:
+        latest_result_container = date_heading.find_next(lambda t: t.name in ['section', 'article', 'div'] and t.get_text(strip=True))
+        if not latest_result_container:
+            latest_result_container = date_heading.parent
+
+    # If we still don't have a container, we'll work with text windows after the first match
+    draw_date = dt.strftime('%Y-%m-%d')
+    numbers = []
+    stars = []
+
+    def extract_from_container(container):
+        local_numbers = []
+        local_stars = []
+        if not container:
+            return local_numbers, local_stars
+        # Prefer explicit balls/lucky stars markup
+        balls_container = container.find(lambda t: t.name in ['div', 'ul'] and (
+            (t.get('class') and any(re.search(r'\bballs?\b', c, re.I) for c in t.get('class'))) or
+            ('balls' in (t.get('id') or ''))
+        ))
+        if balls_container:
+            for ball_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'\bball\b', c, re.I)):
+                text = ball_span.get_text(strip=True)
+                if re.fullmatch(r'\d{1,2}', text):
+                    n = int(text)
+                    if 1 <= n <= 50:
+                        local_numbers.append(n)
+            for star_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'(lucky\s*star|star)', c, re.I)):
+                text = star_span.get_text(strip=True)
+                if re.fullmatch(r'\d{1,2}', text):
+                    s = int(text)
+                    if 1 <= s <= 12:
+                        local_stars.append(s)
+        # If not enough, scan generic spans within container
+        if len(local_numbers) < 5:
+            for sp in container.find_all('span'):
+                t = sp.get_text(strip=True)
+                if re.fullmatch(r'\d{1,2}', t):
+                    v = int(t)
+                    if 1 <= v <= 50 and v not in local_numbers:
+                        local_numbers.append(v)
+                if len(local_numbers) >= 5:
+                    break
+        if len(local_stars) < 2:
+            star_label = container.find(string=re.compile(r'Lucky\s*Stars?', re.I))
+            if star_label:
+                parent = star_label.parent if hasattr(star_label, 'parent') else container
+                for sp in parent.find_all_next('span', limit=6):
+                    t = sp.get_text(strip=True)
+                    if re.fullmatch(r'\d{1,2}', t):
+                        v = int(t)
+                        if 1 <= v <= 12 and v not in local_stars:
+                            local_stars.append(v)
+                    if len(local_stars) >= 2:
+                        break
+        return local_numbers, local_stars
+
+    n1, s1 = extract_from_container(latest_result_container)
+    numbers.extend(n1)
+    stars.extend(s1)
+
+    # If container strategy failed, use text window after the matched date text
+    if len(numbers) != 5 or len(stars) != 2:
+        full_text = soup.get_text(" ", strip=True)
+        match_idx = None
+        for p in patterns:
+            m = re.search(p, full_text, re.I)
+            if m:
+                match_idx = m.end()
+                break
+        if match_idx is None:
+            return None
+        window = full_text[match_idx: match_idx + 6000]
+        tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', window)]
+        # sliding selection: first 5 mains then next 2 stars
+        for i in range(0, max(0, len(tokens) - 7)):
+            mains = []
+            j = i
+            while j < len(tokens) and len(mains) < 5:
+                v = tokens[j]
+                if 1 <= v <= 50 and v not in mains:
+                    mains.append(v)
+                j += 1
+            if len(mains) < 5:
+                continue
+            stars_c = []
+            while j < len(tokens) and len(stars_c) < 2:
+                v = tokens[j]
+                if 1 <= v <= 12 and v not in stars_c:
+                    stars_c.append(v)
+                j += 1
+            if len(stars_c) == 2:
+                numbers = mains
+                stars = stars_c
+                break
+
+    # Validate ranges
+    if len(numbers) != 5 or len(stars) != 2:
+        return None
+    if not all(1 <= n <= 50 for n in numbers) or not all(1 <= s <= 12 for s in stars):
+        return None
+
+    return {
+        "draw_date": draw_date,
+        "numbers": sorted(numbers),
+        "stars": sorted(stars),
+        "jackpot": None,
+        "winners": None
+    }
+
 @app.route('/api/sync', methods=['GET', 'POST'])
 def sync_latest():
     try:
@@ -307,3 +452,43 @@ def sync_latest():
         return jsonify({"status": "ok", "upserted": draw.get("draw_date"), "parsed": draw})
     except Exception as e:
         return jsonify({"error": "Sync failed", "detail": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route('/api/sync_date')
+def sync_date():
+    """Sync a specific draw date using the multi-draw results page."""
+    try:
+        from .db import ensure_schema, upsert_draw
+        ensure_schema()
+
+        target_date = request.args.get('date')
+        if not target_date:
+            return jsonify({"error": "Missing required query param 'date' (YYYY-MM-DD)"}), 400
+        # Validate date format
+        try:
+            datetime.strptime(target_date, '%Y-%m-%d')
+        except Exception:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
+
+        source_url = os.getenv("EURO_SOURCE_URL", "https://www.euro-millions.com/results")
+        headers = {"Accept": "text/html"}
+        try:
+            resp = requests.get(source_url, timeout=15, headers=headers)
+            resp.raise_for_status()
+            draw = parse_draw_for_date(resp.text, target_date)
+        except Exception as e:
+            return jsonify({"error": f"Failed to fetch from page: {e}"}), 502
+
+        if not draw:
+            return jsonify({
+                "error": "Could not parse target draw from page",
+                "date": target_date,
+                "url": source_url
+            }), 422
+
+        ok = upsert_draw(draw)
+        if not ok:
+            return jsonify({"error": "Failed to persist draw"}), 500
+
+        return jsonify({"status": "ok", "upserted": draw.get("draw_date"), "parsed": draw})
+    except Exception as e:
+        return jsonify({"error": "Sync date failed", "detail": str(e), "trace": traceback.format_exc()}), 500
