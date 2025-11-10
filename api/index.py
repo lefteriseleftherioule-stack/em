@@ -307,12 +307,29 @@ def parse_draw_for_date(html_content, target_date_str):
             date_heading = h
             break
 
+    # If heading not found, search any text node containing the date
+    matched_node = None
+    if not date_heading:
+        for text_node in soup.find_all(string=True):
+            txt = (text_node or '').strip()
+            if not txt:
+                continue
+            if any(re.search(p, txt, re.I) for p in patterns):
+                matched_node = text_node
+                break
+
     # Select a container near the heading; otherwise use whole document after the match
     latest_result_container = None
     if date_heading:
         latest_result_container = date_heading.find_next(lambda t: t.name in ['section', 'article', 'div'] and t.get_text(strip=True))
         if not latest_result_container:
             latest_result_container = date_heading.parent
+    elif matched_node:
+        # Use the matched text node's parent as the container
+        try:
+            latest_result_container = matched_node.parent
+        except Exception:
+            latest_result_container = None
 
     # If we still don't have a container, we'll work with text windows after the first match
     draw_date = dt.strftime('%Y-%m-%d')
@@ -342,9 +359,9 @@ def parse_draw_for_date(html_content, target_date_str):
                     s = int(text)
                     if 1 <= s <= 12:
                         local_stars.append(s)
-        # If not enough, scan generic spans within container
+        # If not enough, scan generic spans and list items within container
         if len(local_numbers) < 5:
-            for sp in container.find_all('span'):
+            for sp in container.find_all(['span', 'li', 'div']):
                 t = sp.get_text(strip=True)
                 if re.fullmatch(r'\d{1,2}', t):
                     v = int(t)
