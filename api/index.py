@@ -510,6 +510,28 @@ def parse_draw_detail_page(html_content, target_date_str):
     if not container:
         container = soup
 
+    # Try explicit spans first: main balls vs lucky star spans
+    # This closely matches euro-millions.com detail pages
+    mains_spans = container.find_all('span', class_=lambda c: isinstance(c, str) and ('ball' in c.lower()) and ('star' not in c.lower()) and ('lucky' not in c.lower())) if container else []
+    for sp in mains_spans:
+        t = sp.get_text(strip=True)
+        if re.fullmatch(r'\d{1,2}', t):
+            v = int(t)
+            if 1 <= v <= 50 and v not in numbers:
+                numbers.append(v)
+        if len(numbers) >= 5:
+            break
+    if len(numbers) < 5:
+        stars_spans = container.find_all('span', class_=lambda c: isinstance(c, str) and (('lucky' in c.lower()) or ('star' in c.lower()))) if container else []
+        for sp in stars_spans:
+            t = sp.get_text(strip=True)
+            if re.fullmatch(r'\d{1,2}', t):
+                v = int(t)
+                if 1 <= v <= 12 and v not in stars:
+                    stars.append(v)
+            if len(stars) >= 2:
+                break
+
     # Extract using clusters to avoid picking prize table numbers
     def extract_cluster(parent):
         mains = []
@@ -564,9 +586,12 @@ def parse_draw_detail_page(html_content, target_date_str):
                     return mains, lucky
         return mains, lucky
 
-    m1, s1 = extract_cluster(container)
-    numbers = m1
-    stars = s1
+    if len(numbers) < 5 or len(stars) < 2:
+        m1, s1 = extract_cluster(container)
+        if len(numbers) < 5:
+            numbers = m1
+        if len(stars) < 2:
+            stars = s1
 
     # Fallback: whole-document token scan with sliding window
     if len(numbers) < 5 or len(stars) < 2:
