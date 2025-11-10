@@ -83,6 +83,7 @@ def latest_draw():
 
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
+import json
 
 def parse_draw_from_page(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -366,6 +367,83 @@ def parse_draw_for_date(html_content, target_date_str):
     except Exception:
         return None
 
+    # Try extracting structured data from JSON scripts for the specific date
+    def _extract_structured_for_date(soup, target_date_str):
+        def walk(obj):
+            results = []
+            if isinstance(obj, dict):
+                d = None
+                for dk in ['date', 'drawDate', 'draw_date']:
+                    val = obj.get(dk)
+                    if isinstance(val, str):
+                        try:
+                            d = datetime.strptime(val[:10], '%Y-%m-%d').strftime('%Y-%m-%d')
+                        except Exception:
+                            pass
+                nums = None
+                sts = None
+                for nk in ['numbers', 'mainNumbers', 'main_numbers']:
+                    if nk in obj and isinstance(obj[nk], list):
+                        vals = []
+                        for x in obj[nk]:
+                            sx = str(x)
+                            if re.fullmatch(r'\d{1,2}', sx):
+                                iv = int(sx)
+                                if 1 <= iv <= 50:
+                                    vals.append(iv)
+                        if len(vals) >= 5:
+                            nums = vals[:5]
+                for sk in ['luckyStars', 'stars', 'lucky_numbers', 'luckyStars']:
+                    if sk in obj and isinstance(obj[sk], list):
+                        vals = []
+                        for x in obj[sk]:
+                            sx = str(x)
+                            if re.fullmatch(r'\d{1,2}', sx):
+                                iv = int(sx)
+                                if 1 <= iv <= 12:
+                                    vals.append(iv)
+                        if len(vals) >= 2:
+                            sts = vals[:2]
+                if nums and sts:
+                    results.append({'date': d, 'numbers': nums, 'stars': sts})
+                for v in obj.values():
+                    results.extend(walk(v))
+            elif isinstance(obj, list):
+                for it in obj:
+                    results.extend(walk(it))
+            return results
+
+        for script in soup.find_all('script'):
+            ttype = (script.get('type') or '').lower()
+            if 'json' in ttype or ttype == '':
+                text = script.string or script.get_text() or ''
+                if not text.strip():
+                    continue
+                try:
+                    obj = json.loads(text)
+                    matches = walk(obj)
+                    for m in matches:
+                        if m.get('date') == target_date_str:
+                            return sorted(m['numbers']), sorted(m['stars'])
+                except Exception:
+                    # Regex fallback inside JSON-like text
+                    pattern = re.compile(rf'"(?:date|drawDate|draw_date)"\s*:\s*"{re.escape(target_date_str)}".*?"(?:numbers|mainNumbers|main_numbers)"\s*:\s*\[(.*?)\].*?"(?:luckyStars|stars|lucky_numbers|luckyStars)"\s*:\s*\[(.*?)\]', re.S)
+                    m = pattern.search(text)
+                    if m:
+                        nums = [int(x) for x in re.findall(r'\d{1,2}', m.group(1)) if 1 <= int(x) <= 50]
+                        sts = [int(x) for x in re.findall(r'\d{1,2}', m.group(2)) if 1 <= int(x) <= 12]
+                        if len(nums) >= 5 and len(sts) >= 2:
+                            return sorted(nums[:5]), sorted(sts[:2])
+        return None, None
+
+    jnums, jstars = _extract_structured_for_date(soup, target_date_str)
+    # initialize defaults early; structured values will short-circuit later branches
+    numbers = []
+    stars = []
+    if jnums and jstars:
+        numbers = jnums
+        stars = jstars
+
     weekday = dt.strftime('%A')  # e.g., Tuesday
     day_no = dt.day               # e.g., 4
     day_no_z = f"{day_no:02d}"   # e.g., 04
@@ -441,8 +519,6 @@ def parse_draw_for_date(html_content, target_date_str):
 
     # If we still don't have a container, we'll work with text windows after the first match
     draw_date = dt.strftime('%Y-%m-%d')
-    numbers = []
-    stars = []
 
     def extract_from_container(container):
         local_numbers = []
@@ -650,6 +726,84 @@ def parse_draw_detail_page(html_content, target_date_str):
     soup = BeautifulSoup(html_content, 'html.parser')
     numbers = []
     stars = []
+
+    # Try extracting structured data from JSON scripts first
+    def _extract_structured_result_from_scripts(soup, target_date_str=None):
+        def walk(obj):
+            found = []
+            if isinstance(obj, dict):
+                d = None
+                for dk in ['date', 'drawDate', 'draw_date']:
+                    val = obj.get(dk)
+                    if isinstance(val, str):
+                        try:
+                            d = datetime.strptime(val[:10], '%Y-%m-%d').strftime('%Y-%m-%d')
+                        except Exception:
+                            pass
+                nums = None
+                sts = None
+                for nk in ['numbers', 'mainNumbers', 'main_numbers']:
+                    if nk in obj and isinstance(obj[nk], list):
+                        vals = []
+                        for x in obj[nk]:
+                            sx = str(x)
+                            if re.fullmatch(r'\d{1,2}', sx):
+                                iv = int(sx)
+                                if 1 <= iv <= 50:
+                                    vals.append(iv)
+                        if len(vals) >= 5:
+                            nums = vals[:5]
+                for sk in ['luckyStars', 'stars', 'lucky_numbers', 'luckyStars']:
+                    if sk in obj and isinstance(obj[sk], list):
+                        vals = []
+                        for x in obj[sk]:
+                            sx = str(x)
+                            if re.fullmatch(r'\d{1,2}', sx):
+                                iv = int(sx)
+                                if 1 <= iv <= 12:
+                                    vals.append(iv)
+                        if len(vals) >= 2:
+                            sts = vals[:2]
+                if nums and sts:
+                    found.append({'date': d, 'numbers': nums, 'stars': sts})
+                for v in obj.values():
+                    found.extend(walk(v))
+            elif isinstance(obj, list):
+                for it in obj:
+                    found.extend(walk(it))
+            return found
+
+        for script in soup.find_all('script'):
+            ttype = (script.get('type') or '').lower()
+            if 'json' in ttype or ttype == '':
+                text = script.string or script.get_text() or ''
+                if not text.strip():
+                    continue
+                try:
+                    obj = json.loads(text)
+                    matches = walk(obj)
+                    if target_date_str:
+                        for m in matches:
+                            if m.get('date') == target_date_str:
+                                return sorted(m['numbers']), sorted(m['stars'])
+                    if matches:
+                        m = matches[0]
+                        return sorted(m['numbers']), sorted(m['stars'])
+                except Exception:
+                    # Regex fallback inside JSON-like text
+                    m_nums = re.search(r'"(?:numbers|mainNumbers|main_numbers)"\s*:\s*\[(.*?)\]', text, re.S)
+                    m_stars = re.search(r'"(?:luckyStars|stars|lucky_numbers|luckyStars)"\s*:\s*\[(.*?)\]', text, re.S)
+                    if m_nums and m_stars:
+                        nums = [int(x) for x in re.findall(r'\d{1,2}', m_nums.group(1)) if 1 <= int(x) <= 50]
+                        sts = [int(x) for x in re.findall(r'\d{1,2}', m_stars.group(1)) if 1 <= int(x) <= 12]
+                        if len(nums) >= 5 and len(sts) >= 2:
+                            return sorted(nums[:5]), sorted(sts[:2])
+        return None, None
+
+    jnums, jstars = _extract_structured_result_from_scripts(soup, target_date_str)
+    if jnums and jstars:
+        numbers = jnums
+        stars = jstars
 
     # Prefer explicit containers commonly used on detail pages
     container = None
