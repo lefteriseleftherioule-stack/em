@@ -201,6 +201,58 @@ def parse_draw_from_page(html_content):
                 except Exception:
                     pass
 
+    # If we still don't have enough, prefer a clear mains list and take stars from an adjacent stars list
+    if len(numbers) < 5 or len(stars) < 2:
+        mains_list = None
+        stars_list = None
+        # Select mains list: class names like balls/main/winning with at least 5 valid numbers
+        candidate_mains = []
+        for lst in latest_result_container.find_all(['ul', 'ol']):
+            lst_classes = " ".join(lst.get('class') or [])
+            hint_main = re.search(r'(balls|main|winning)', lst_classes, re.I)
+            vals = []
+            for node in lst.find_all(['li', 'span']):
+                t = node.get_text(strip=True)
+                if re.fullmatch(r'\d{1,2}', t):
+                    v = int(t)
+                    if 1 <= v <= 50:
+                        vals.append(v)
+            if len(vals) >= 5 and (hint_main or len(vals) == 5):
+                candidate_mains.append((lst, vals))
+        if candidate_mains:
+            mains_list, mains_vals = candidate_mains[0]
+            if len(numbers) < 5:
+                numbers = mains_vals[:5]
+        # Prefer a distinct stars list via classes
+        for lst in latest_result_container.find_all(['ul', 'ol']):
+            lst_classes = " ".join(lst.get('class') or [])
+            if re.search(r'(lucky|stars)', lst_classes, re.I):
+                svals = []
+                for node in lst.find_all(['li', 'span']):
+                    t = node.get_text(strip=True)
+                    if re.fullmatch(r'\d{1,2}', t):
+                        v = int(t)
+                        if 1 <= v <= 12:
+                            svals.append(v)
+                if len(svals) >= 2:
+                    stars_list = lst
+                    if len(stars) < 2:
+                        stars = svals[:2]
+                        break
+        # If no explicit stars list, take the next list after mains_list and read two <=12 values
+        if mains_list and len(stars) < 2:
+            nxt = mains_list.find_next(['ul', 'ol'])
+            if nxt and nxt is not stars_list:
+                svals = []
+                for node in nxt.find_all(['li', 'span']):
+                    t = node.get_text(strip=True)
+                    if re.fullmatch(r'\d{1,2}', t):
+                        v = int(t)
+                        if 1 <= v <= 12:
+                            svals.append(v)
+                if len(svals) >= 2:
+                    stars = svals[:2]
+
     # Fallback: within latest_result_container, look for generic spans (ignore heading)
     if len(numbers) < 5:
         generic_spans = latest_result_container.find_all('span')
@@ -420,6 +472,54 @@ def parse_draw_for_date(html_content, target_date_str):
                     s = int(text)
                     if 1 <= s <= 12 and s not in local_stars:
                         local_stars.append(s)
+        # Prefer a clear mains list and adjacent stars list
+        if (len(local_numbers) < 5 or len(local_stars) < 2) and container:
+            mains_list = None
+            stars_list = None
+            candidate_mains = []
+            for lst in container.find_all(['ul', 'ol']):
+                lst_classes = " ".join(lst.get('class') or [])
+                hint_main = re.search(r'(balls|main|winning)', lst_classes, re.I)
+                vals = []
+                for node in lst.find_all(['li', 'span']):
+                    t = node.get_text(strip=True)
+                    if re.fullmatch(r'\d{1,2}', t):
+                        v = int(t)
+                        if 1 <= v <= 50:
+                            vals.append(v)
+                if len(vals) >= 5 and (hint_main or len(vals) == 5):
+                    candidate_mains.append((lst, vals))
+            if candidate_mains:
+                mains_list, mains_vals = candidate_mains[0]
+                if len(local_numbers) < 5:
+                    local_numbers = mains_vals[:5]
+            for lst in container.find_all(['ul', 'ol']):
+                lst_classes = " ".join(lst.get('class') or [])
+                if re.search(r'(lucky|stars)', lst_classes, re.I):
+                    svals = []
+                    for node in lst.find_all(['li', 'span']):
+                        t = node.get_text(strip=True)
+                        if re.fullmatch(r'\d{1,2}', t):
+                            v = int(t)
+                            if 1 <= v <= 12:
+                                svals.append(v)
+                    if len(svals) >= 2:
+                        stars_list = lst
+                        if len(local_stars) < 2:
+                            local_stars = svals[:2]
+                            break
+            if mains_list and len(local_stars) < 2:
+                nxt = mains_list.find_next(['ul', 'ol'])
+                if nxt and nxt is not stars_list:
+                    svals = []
+                    for node in nxt.find_all(['li', 'span']):
+                        t = node.get_text(strip=True)
+                        if re.fullmatch(r'\d{1,2}', t):
+                            v = int(t)
+                            if 1 <= v <= 12:
+                                svals.append(v)
+                    if len(svals) >= 2:
+                        local_stars = svals[:2]
         # If not enough, scan generic spans and list items within container
         if len(local_numbers) < 5:
             # scan common inline digit carriers
