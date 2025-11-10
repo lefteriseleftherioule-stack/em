@@ -673,32 +673,8 @@ def parse_draw_for_date(html_content, target_date_str, collect_debug: bool = Fal
                 if provenance["source"] is None:
                     provenance["source"] = "token_scan"
                     provenance["notes"].append("Label-guided token scan using Lucky Stars marker")
-        else:
-            tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', window)]
-            # sliding selection: first 5 mains then next 2 stars
-            for i in range(0, max(0, len(tokens) - 7)):
-                mains = []
-                j = i
-                while j < len(tokens) and len(mains) < 5:
-                    v = tokens[j]
-                    if 1 <= v <= 50 and v not in mains:
-                        mains.append(v)
-                    j += 1
-                if len(mains) < 5:
-                    continue
-                stars_c = []
-                while j < len(tokens) and len(stars_c) < 2:
-                    v = tokens[j]
-                    if 1 <= v <= 12 and v not in stars_c:
-                        stars_c.append(v)
-                    j += 1
-                if len(stars_c) == 2:
-                    numbers = mains
-                    stars = stars_c
-                    if provenance["source"] is None:
-                        provenance["source"] = "token_scan"
-                        provenance["notes"].append("Used sliding window token scan within matched date window")
-                    break
+        # If no explicit Lucky Stars marker is present, do not attempt sliding-window token scan here.
+        # Instead, let the detail page fallbacks handle extraction to avoid false positives.
 
     # Validate ranges
     if len(numbers) != 5 or len(stars) != 2:
