@@ -1020,14 +1020,107 @@ def sync_latest():
 
 
         if not draw:
-            # Add some debugging information
-            debug_info = {
-                "error": "Could not parse draw from page",
-                "html_preview": resp.text[:500] + "..." if len(resp.text) > 500 else resp.text,
-                "html_length": len(resp.text),
-                "url": source_url
-            }
-            return jsonify(debug_info), 422
+            # Fallback: derive latest date from page, then try detail/archive parsers
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            target_date = None
+            # Prefer <time datetime="YYYY-MM-DD">
+            t = soup.find('time', attrs={'datetime': re.compile(r'^\d{4}-\d{2}-\d{2}')})
+            if t and t.get('datetime'):
+                target_date = t.get('datetime')[:10]
+            if not target_date:
+                # Try ISO date in text
+                full_text = soup.get_text(" ", strip=True)
+                m_iso = re.search(r'\b(\d{4}-\d{2}-\d{2})\b', full_text)
+                if m_iso:
+                    target_date = m_iso.group(1)
+            if not target_date:
+                # Try dd/mm/yyyy and convert
+                m_dmy = re.search(r'\b(\d{2})\/(\d{2})\/(\d{4})\b', full_text)
+                if m_dmy:
+                    d, m, y = m_dmy.groups()
+                    target_date = f"{y}-{m}-{d}"
+            if not target_date:
+                # Try textual month names
+                m_txt = re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})', full_text)
+                if not m_txt:
+                    m_txt = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})', full_text)
+                if m_txt:
+                    day = m_txt.group(1).zfill(2)
+                    month_name = m_txt.group(2)
+                    year = m_txt.group(3)
+                    month_map = {
+                        'January': '01', 'February': '02', 'March': '03', 'April': '04',
+                        'May': '05', 'June': '06', 'July': '07', 'August': '08',
+                        'September': '09', 'October': '10', 'November': '11', 'December': '12'
+                    }
+                    month = month_map.get(str(month_name).capitalize(), '01')
+                    target_date = f"{year}-{month}-{day}"
+
+            if target_date:
+                # Attempt per-draw detail/archive fallbacks like /api/sync_date
+                p = urlparse(source_url)
+                base = f"{p.scheme}://{p.netloc}"
+                year = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y')
+                date_dash = datetime.strptime(target_date, '%Y-%m-%d').strftime('%d-%m-%Y')
+
+                bases = []
+                euro_millions = f"{p.scheme}://www.euro-millions.com"
+                euromillones = f"{p.scheme}://www.euromillones.com"
+                bases.append(euro_millions)
+                bases.append(euromillones)
+                if base not in bases:
+                    bases.insert(0, base)
+                seen = set()
+                bases = [b for b in bases if not (b in seen or seen.add(b))]
+
+                candidates = []
+                for b in bases:
+                    candidates.append(urljoin(b, f"/en/results/euromillions/{target_date}"))
+                    candidates.append(urljoin(b, f"/en/results/euromillions/{date_dash}"))
+                    candidates.append(urljoin(b, f"/results/euromillions/{target_date}"))
+                    candidates.append(urljoin(b, f"/results/euromillions/{date_dash}"))
+                    candidates.append(urljoin(b, f"/results/{target_date}"))
+                    candidates.append(urljoin(b, f"/results/{date_dash}"))
+                    candidates.append(urljoin(b, f"/amp/results/{target_date}"))
+                    candidates.append(urljoin(b, f"/amp/results/{date_dash}"))
+                    candidates.append(urljoin(b, f"/results-history-{year}"))
+
+                tried = []
+                for url in candidates:
+                    try:
+                        r2 = requests.get(url, timeout=(5, 20), headers={"Accept": "text/html"})
+                        tried.append({"url": url, "status": r2.status_code, "length": len(r2.text)})
+                        if r2.status_code == 200:
+                            if f"/results-history-{year}" in url:
+                                # Multi-draw archive page: parse using target date
+                                d2 = parse_draw_for_date(r2.text, target_date, collect_debug=False)
+                            else:
+                                d2 = parse_draw_detail_page(r2.text, target_date, collect_debug=False)
+                            if d2:
+                                draw = d2
+                                break
+                    except Exception as e:
+                        tried.append({"url": url, "status": "error", "error": str(e)})
+
+                if not draw:
+                    return jsonify({
+                        "error": "Could not parse latest draw via fallbacks",
+                        "url": source_url,
+                        "derived_date": target_date,
+                        "html_preview": resp.text[:800] + "..." if len(resp.text) > 800 else resp.text,
+                        "html_length": len(resp.text),
+                        "fallback_attempts": tried
+                    }), 422
+            else:
+                # Could not derive a target date; return debug info
+                debug_info = {
+                    "error": "Could not parse draw from page",
+                    "reason": "No target date could be derived",
+                    "html_preview": resp.text[:500] + "..." if len(resp.text) > 500 else resp.text,
+                    "html_length": len(resp.text),
+                    "url": source_url
+                }
+                return jsonify(debug_info), 422
 
         ok = upsert_draw(draw)
         if not ok:
