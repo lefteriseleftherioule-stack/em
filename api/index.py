@@ -7,6 +7,14 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# CORS: allow browser clients to read responses across origins
+@app.after_request
+def add_cors_headers(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
+
 @app.route('/')
 def home():
     return jsonify({
@@ -20,8 +28,11 @@ def home():
         }
     })
 
-@app.route('/api/health')
+@app.route('/api/health', methods=['GET', 'OPTIONS'])
 def health():
+    # Preflight support
+    if request.method == 'OPTIONS':
+        return ('', 200)
     try:
         import sys
         present_env = [k for k in ("DATABASE_URL",) if os.getenv(k)]
@@ -33,8 +44,11 @@ def health():
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
-@app.route('/api/draws')
+@app.route('/api/draws', methods=['GET', 'OPTIONS'])
 def get_draws():
+    # Preflight support
+    if request.method == 'OPTIONS':
+        return ('', 200)
     try:
         from .db import get_draws as db_get_draws
         year_param = request.args.get('year')
@@ -63,8 +77,11 @@ def get_draws():
     except Exception as e:
         return jsonify({"error": "Failed to fetch draws", "detail": str(e), "trace": traceback.format_exc()}), 500
 
-@app.route('/api/latest')
+@app.route('/api/latest', methods=['GET', 'OPTIONS'])
 def latest_draw():
+    # Preflight support
+    if request.method == 'OPTIONS':
+        return ('', 200)
     try:
         from .db import get_latest_draw
         row = get_latest_draw()
