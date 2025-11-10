@@ -182,10 +182,7 @@ def parse_draw_from_page(html_content):
                 if 1 <= v <= 50 and v not in numbers:
                     numbers.append(v)
         # If we got mains but no stars, infer stars from the last two li digits within 1-12
-        if len(numbers) >= 5 and len(stars) < 2 and len(ordered_li_digits) >= 7:
-            candidates_stars = [d for d in ordered_li_digits[-4:] if 1 <= d <= 12]
-            if len(candidates_stars) >= 2:
-                stars = candidates_stars[-2:]
+        # Removed permissive inference to avoid misclassifying small mains as stars
 
         # Fallback: spans within balls container
         for ball_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'\bball\b', c, re.I)):
@@ -251,19 +248,7 @@ def parse_draw_from_page(html_content):
                     stars_list = lst
                     stars = svals[:2]
                     break
-        # As a last resort, look for a combined list of 7 digits and take last two <=12
-        if len(stars) < 2:
-            for lst in latest_result_container.find_all(['ul', 'ol']):
-                vals = []
-                for node in lst.find_all(['li', 'span']):
-                    t = node.get_text(strip=True)
-                    if re.fullmatch(r'\d{1,2}', t):
-                        vals.append(int(t))
-                if len(vals) >= 7:
-                    cstars = [d for d in vals[-4:] if 1 <= d <= 12]
-                    if len(cstars) >= 2:
-                        stars = cstars[-2:]
-                        break
+        # Removed permissive combined-list fallback to avoid misclassifying stars from unrelated lists
 
     # Fallback: within latest_result_container, look for generic spans (ignore heading)
     if len(numbers) < 5:
@@ -548,11 +533,7 @@ def parse_draw_for_date(html_content, target_date_str):
                 else:
                     if 1 <= v <= 50 and v not in local_numbers:
                         local_numbers.append(v)
-            # If we have enough mains but no stars, infer stars from last two li digits (<=12)
-            if len(local_numbers) >= 5 and len(local_stars) < 2 and len(ordered_li_digits) >= 7:
-                cstars = [d for d in ordered_li_digits[-4:] if 1 <= d <= 12]
-                if len(cstars) >= 2:
-                    local_stars = cstars[-2:]
+            # Do not infer stars from ordered li digits; require explicit labels/classes elsewhere
             # Fallback to spans
             for ball_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'\bball\b', c, re.I)):
                 text = ball_span.get_text(strip=True)
