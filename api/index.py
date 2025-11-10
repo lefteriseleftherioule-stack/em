@@ -243,8 +243,8 @@ def parse_draw_from_page(html_content):
                         v = int(t)
                         if 1 <= v <= 12:
                             svals.append(v)
-                # Stars list should have exactly two star digits
-                if (re.search(r'(lucky|stars)', lst_classes, re.I) and len(svals) >= 2) or len(svals) == 2:
+                # Only accept explicit stars lists; do NOT accept generic 2-digit lists
+                if (re.search(r'(lucky|stars)', lst_classes, re.I) and len(svals) >= 2):
                     stars_list = lst
                     stars = svals[:2]
                     break
@@ -297,35 +297,27 @@ def parse_draw_from_page(html_content):
         except Exception:
             start_idx = 0
         window = full_text[start_idx:start_idx + 6000]
-        tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', window)]
-
-        # sliding selection: first 5 mains (1-50, distinct), then next 2 stars (1-12, distinct)
-        selected_numbers = None
-        selected_stars = None
-        for i in range(0, max(0, len(tokens) - 7)):
+        star_label_m = re.search(r'(Lucky\s*Stars?|Estrellas?)', window, re.I)
+        if star_label_m:
+            before = window[:star_label_m.start()]
+            after = window[star_label_m.end():]
+            mains_tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', before)]
+            stars_tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', after)]
             mains = []
-            j = i
-            while j < len(tokens) and len(mains) < 5:
-                v = tokens[j]
+            for v in mains_tokens:
                 if 1 <= v <= 50 and v not in mains:
                     mains.append(v)
-                j += 1
-            if len(mains) < 5:
-                continue
+                if len(mains) == 5:
+                    break
             stars_c = []
-            while j < len(tokens) and len(stars_c) < 2:
-                v = tokens[j]
+            for v in stars_tokens:
                 if 1 <= v <= 12 and v not in stars_c:
                     stars_c.append(v)
-                j += 1
-            if len(stars_c) == 2:
-                selected_numbers = mains
-                selected_stars = stars_c
-                break
-
-        if selected_numbers and selected_stars:
-            numbers = selected_numbers
-            stars = selected_stars
+                if len(stars_c) == 2:
+                    break
+            if len(mains) == 5 and len(stars_c) == 2:
+                numbers = mains
+                stars = stars_c
 
     # Validate ranges
     if len(numbers) != 5 or len(stars) != 2:
@@ -586,23 +578,11 @@ def parse_draw_for_date(html_content, target_date_str, collect_debug: bool = Fal
                             v = int(t)
                             if 1 <= v <= 12:
                                 svals.append(v)
-                    if (re.search(r'(lucky|stars)', lst_classes, re.I) and len(svals) >= 2) or len(svals) == 2:
+                    # Only accept explicit stars lists; do NOT accept generic 2-digit lists
+                    if (re.search(r'(lucky|stars)', lst_classes, re.I) and len(svals) >= 2):
                         stars_list = lst
                         local_stars = svals[:2]
                         break
-            # Combined-list fallback
-            if len(local_stars) < 2:
-                for lst in container.find_all(['ul', 'ol']):
-                    vals = []
-                    for node in lst.find_all(['li', 'span']):
-                        t = node.get_text(strip=True)
-                        if re.fullmatch(r'\d{1,2}', t):
-                            vals.append(int(t))
-                    if len(vals) >= 7:
-                        cstars = [d for d in vals[-4:] if 1 <= d <= 12]
-                        if len(cstars) >= 2:
-                            local_stars = cstars[-2:]
-                            break
         # If not enough, scan generic spans and list items within container
         if len(local_numbers) < 5:
             # scan common inline digit carriers
@@ -668,31 +648,57 @@ def parse_draw_for_date(html_content, target_date_str, collect_debug: bool = Fal
         next_m = any_date_re.search(tail_text)
         end_idx = match_idx + (next_m.start() if next_m else len(full_text))
         window = full_text[match_idx:end_idx]
-        tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', window)]
-        # sliding selection: first 5 mains then next 2 stars
-        for i in range(0, max(0, len(tokens) - 7)):
+        # Prefer label-guided parsing when "Lucky Stars" label is present in window
+        star_label_m = re.search(r'(Lucky\s*Stars?|Estrellas?)', window, re.I)
+        if star_label_m:
+            before = window[:star_label_m.start()]
+            after = window[star_label_m.end():]
+            mains_tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', before)]
+            stars_tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', after)]
             mains = []
-            j = i
-            while j < len(tokens) and len(mains) < 5:
-                v = tokens[j]
+            for v in mains_tokens:
                 if 1 <= v <= 50 and v not in mains:
                     mains.append(v)
-                j += 1
-            if len(mains) < 5:
-                continue
+                if len(mains) == 5:
+                    break
             stars_c = []
-            while j < len(tokens) and len(stars_c) < 2:
-                v = tokens[j]
+            for v in stars_tokens:
                 if 1 <= v <= 12 and v not in stars_c:
                     stars_c.append(v)
-                j += 1
-            if len(stars_c) == 2:
+                if len(stars_c) == 2:
+                    break
+            if len(mains) == 5 and len(stars_c) == 2:
                 numbers = mains
                 stars = stars_c
                 if provenance["source"] is None:
                     provenance["source"] = "token_scan"
-                    provenance["notes"].append("Used sliding window token scan within matched date window")
-                break
+                    provenance["notes"].append("Label-guided token scan using Lucky Stars marker")
+        else:
+            tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', window)]
+            # sliding selection: first 5 mains then next 2 stars
+            for i in range(0, max(0, len(tokens) - 7)):
+                mains = []
+                j = i
+                while j < len(tokens) and len(mains) < 5:
+                    v = tokens[j]
+                    if 1 <= v <= 50 and v not in mains:
+                        mains.append(v)
+                    j += 1
+                if len(mains) < 5:
+                    continue
+                stars_c = []
+                while j < len(tokens) and len(stars_c) < 2:
+                    v = tokens[j]
+                    if 1 <= v <= 12 and v not in stars_c:
+                        stars_c.append(v)
+                    j += 1
+                if len(stars_c) == 2:
+                    numbers = mains
+                    stars = stars_c
+                    if provenance["source"] is None:
+                        provenance["source"] = "token_scan"
+                        provenance["notes"].append("Used sliding window token scan within matched date window")
+                    break
 
     # Validate ranges
     if len(numbers) != 5 or len(stars) != 2:
