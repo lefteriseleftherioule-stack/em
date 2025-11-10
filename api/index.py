@@ -1032,6 +1032,8 @@ def sync_date():
         ensure_schema()
 
         target_date = request.args.get('date')
+        debug_flag = request.args.get('debug')
+        collect_debug = str(debug_flag or '').lower() in ('1', 'true', 'yes', 'on')
         if not target_date:
             return jsonify({"error": "Missing required query param 'date' (YYYY-MM-DD)"}), 400
         # Validate date format
