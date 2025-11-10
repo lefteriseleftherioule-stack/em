@@ -103,7 +103,8 @@ def parse_draw_from_page(html_content):
                 break
 
     if not latest_result_container:
-        return None
+        # Fallback: use entire document as the container for broader parsing
+        latest_result_container = soup
 
     # Extract date from the heading text (ignore numbers elsewhere)
     if not date_heading:
@@ -112,25 +113,38 @@ def parse_draw_from_page(html_content):
             return None
 
     date_text = date_heading.get_text(strip=True)
-    date_pattern = r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})'
-    date_match = re.search(date_pattern, date_text)
+    # Try multiple date patterns in heading
+    date_match = re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})', date_text)
     if not date_match:
-        # More lenient pattern (some pages omit weekday or comma)
-        date_pattern2 = r'(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})'
-        date_match = re.search(date_pattern2, date_text)
+        date_match = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})', date_text)
+    if not date_match:
+        date_match = re.search(r'(\d{2})\/(\d{2})\/(\d{4})', date_text)
+    if not date_match:
+        # As a last resort, scan the whole document for the first date occurrence
+        full_text = soup.get_text(" ", strip=True)
+        date_match = re.search(r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})', full_text)
+        if not date_match:
+            date_match = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})', full_text)
+        if not date_match:
+            date_match = re.search(r'(\d{2})\/(\d{2})\/(\d{4})', full_text)
         if not date_match:
             return None
 
-    day = date_match.group(1).zfill(2)
-    month_name = date_match.group(2)
-    year = date_match.group(3)
-
-    month_map = {
-        'January': '01', 'February': '02', 'March': '03', 'April': '04',
-        'May': '05', 'June': '06', 'July': '07', 'August': '08',
-        'September': '09', 'October': '10', 'November': '11', 'December': '12'
-    }
-    month = month_map.get(str(month_name).capitalize(), '01')
+    # Build ISO date
+    if '/' in date_match.group(0):
+        day = date_match.group(1)
+        month = date_match.group(2)
+        year = date_match.group(3)
+    else:
+        day = date_match.group(1).zfill(2)
+        month_name = date_match.group(2)
+        year = date_match.group(3)
+        month_map = {
+            'January': '01', 'February': '02', 'March': '03', 'April': '04',
+            'May': '05', 'June': '06', 'July': '07', 'August': '08',
+            'September': '09', 'October': '10', 'November': '11', 'December': '12'
+        }
+        month = month_map.get(str(month_name).capitalize(), '01')
     draw_date = f"{year}-{month}-{day}"
 
     # Extract numbers and stars using multiple strategies inside the container
@@ -207,10 +221,48 @@ def parse_draw_from_page(html_content):
                 if len(stars) >= 2:
                     break
 
-    # Final validation
+    # Final validation, with a robust fallback if primary extraction failed
+    if len(numbers) != 5 or len(stars) != 2:
+        # Document-level fallback: collect digits after the detected date text
+        full_text = soup.get_text(" ", strip=True)
+        try:
+            start_idx = full_text.index(date_match.group(0)) + len(date_match.group(0))
+        except Exception:
+            start_idx = 0
+        window = full_text[start_idx:start_idx + 6000]
+        tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', window)]
+
+        # sliding selection: first 5 mains (1-50, distinct), then next 2 stars (1-12, distinct)
+        selected_numbers = None
+        selected_stars = None
+        for i in range(0, max(0, len(tokens) - 7)):
+            mains = []
+            j = i
+            while j < len(tokens) and len(mains) < 5:
+                v = tokens[j]
+                if 1 <= v <= 50 and v not in mains:
+                    mains.append(v)
+                j += 1
+            if len(mains) < 5:
+                continue
+            stars_c = []
+            while j < len(tokens) and len(stars_c) < 2:
+                v = tokens[j]
+                if 1 <= v <= 12 and v not in stars_c:
+                    stars_c.append(v)
+                j += 1
+            if len(stars_c) == 2:
+                selected_numbers = mains
+                selected_stars = stars_c
+                break
+
+        if selected_numbers and selected_stars:
+            numbers = selected_numbers
+            stars = selected_stars
+
+    # Validate ranges
     if len(numbers) != 5 or len(stars) != 2:
         return None
-
     if not all(1 <= n <= 50 for n in numbers) or not all(1 <= s <= 12 for s in stars):
         return None
 
