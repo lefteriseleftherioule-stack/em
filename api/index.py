@@ -84,58 +84,128 @@ def latest_draw():
 from bs4 import BeautifulSoup
 
 def parse_draw_from_page(html_content):
-    # Constrain parsing to the "Latest Result" section to avoid older draws
-    lower_html = html_content.lower()
-    latest_idx = lower_html.find('latest result')
-    section = html_content[latest_idx:] if latest_idx != -1 else html_content
+    soup = BeautifulSoup(html_content, 'html.parser')
 
-    # Find the date within this section: e.g., "Tuesday, 04 November 2025"
-    date_pattern = r'([A-Za-z]+),\s+(\d{2})\s+([A-Za-z]+)\s+(\d{4})'
-    date_match = re.search(date_pattern, section)
-    if not date_match:
+    # Strategy 1: Find explicit 'latest' container
+    latest_result_container = soup.find('div', class_='latest')
+    if not latest_result_container:
+        latest_result_container = soup.find(class_=lambda x: isinstance(x, str) and ('latest-result' in x.lower() or 'latest' in x.lower()))
+
+    # Strategy 2: Fall back to first heading mentioning EuroMillions Results
+    date_heading = None
+    if not latest_result_container:
+        headings = soup.find_all(['h1', 'h2', 'h3'], string=re.compile(r'EuroMillions\s+Results', re.I))
+        for h in headings:
+            candidate_container = h.find_next(lambda t: t.name in ['section', 'article', 'div'] and t.get_text(strip=True))
+            if candidate_container:
+                latest_result_container = candidate_container
+                date_heading = h
+                break
+
+    if not latest_result_container:
         return None
 
-    day = date_match.group(2)
-    month_name = date_match.group(3)
-    year = date_match.group(4)
+    # Extract date from the heading text (ignore numbers elsewhere)
+    if not date_heading:
+        date_heading = latest_result_container.find(['h1', 'h2', 'h3'])
+        if not date_heading:
+            return None
+
+    date_text = date_heading.get_text(strip=True)
+    date_pattern = r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})'
+    date_match = re.search(date_pattern, date_text)
+    if not date_match:
+        # More lenient pattern (some pages omit weekday or comma)
+        date_pattern2 = r'(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})'
+        date_match = re.search(date_pattern2, date_text)
+        if not date_match:
+            return None
+
+    day = date_match.group(1).zfill(2)
+    month_name = date_match.group(2)
+    year = date_match.group(3)
 
     month_map = {
         'January': '01', 'February': '02', 'March': '03', 'April': '04',
         'May': '05', 'June': '06', 'July': '07', 'August': '08',
         'September': '09', 'October': '10', 'November': '11', 'December': '12'
     }
-    month = month_map.get(month_name, '01')
+    month = month_map.get(str(month_name).capitalize(), '01')
     draw_date = f"{year}-{month}-{day}"
 
-    # Extract numbers only AFTER the date line within the section
-    after_date = section[date_match.end(): date_match.end() + 4000]
-
+    # Extract numbers and stars using multiple strategies inside the container
     numbers = []
     stars = []
 
-    # Scan for 1-2 digit numbers and pick first 5 (1-50) then first 2 stars (1-12)
-    tokens = re.findall(r'\b\d{1,2}\b', after_date)
-    for tok in tokens:
-        try:
-            n = int(tok)
-        except ValueError:
-            continue
-        if len(numbers) < 5 and 1 <= n <= 50:
-            numbers.append(n)
-            continue
-        if len(numbers) == 5 and len(stars) < 2 and 1 <= n <= 12:
-            stars.append(n)
-            if len(stars) == 2:
+    # Prefer explicit balls container
+    balls_container = latest_result_container.find('div', class_='balls')
+    if not balls_container:
+        # broader search: div/ul with class or id containing balls
+        balls_container = latest_result_container.find(lambda t: t.name in ['div', 'ul'] and (
+            (t.get('class') and any(re.search(r'\bballs?\b', c, re.I) for c in t.get('class'))) or
+            ('balls' in (t.get('id') or ''))
+        ))
+
+    # Main numbers
+    if balls_container:
+        for ball_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'\bball\b', c, re.I)):
+            text = ball_span.get_text(strip=True)
+            if re.fullmatch(r'\d{1,2}', text):
+                try:
+                    n = int(text)
+                    if 1 <= n <= 50:
+                        numbers.append(n)
+                except Exception:
+                    pass
+
+        # Lucky stars
+        for star_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'(lucky\s*star|star)', c, re.I)):
+            text = star_span.get_text(strip=True)
+            if re.fullmatch(r'\d{1,2}', text):
+                try:
+                    s = int(text)
+                    if 1 <= s <= 12:
+                        stars.append(s)
+                except Exception:
+                    pass
+
+    # Fallback: within latest_result_container, look for generic spans (ignore heading)
+    if len(numbers) < 5:
+        generic_spans = latest_result_container.find_all('span')
+        for sp in generic_spans:
+            # Skip spans inside the heading
+            if date_heading and date_heading in sp.parents:
+                continue
+            text = sp.get_text(strip=True)
+            if re.fullmatch(r'\d{1,2}', text):
+                try:
+                    val = int(text)
+                    if 1 <= val <= 50 and val not in numbers:
+                        numbers.append(val)
+                except Exception:
+                    pass
+            if len(numbers) >= 5:
                 break
 
-    # If not found, try a more targeted pattern for stars nearby labels
-    if len(numbers) == 5 and len(stars) < 2:
-        star_match = re.search(r'(?:Stars?|Lucky\s*Stars?)\D*(\d{1,2})\D+(\d{1,2})', after_date, re.IGNORECASE)
-        if star_match:
-            s1 = int(star_match.group(1))
-            s2 = int(star_match.group(2))
-            if 1 <= s1 <= 12 and 1 <= s2 <= 12:
-                stars = [s1, s2]
+    if len(stars) < 2:
+        # Look for a "Lucky Stars" label, then collect following digit spans
+        star_label = latest_result_container.find(string=re.compile(r'Lucky\s*Stars?', re.I))
+        if star_label:
+            parent = star_label.parent if hasattr(star_label, 'parent') else latest_result_container
+            following_spans = parent.find_all_next('span', limit=6)
+            for sp in following_spans:
+                if date_heading and date_heading in sp.parents:
+                    continue
+                text = sp.get_text(strip=True)
+                if re.fullmatch(r'\d{1,2}', text):
+                    try:
+                        val = int(text)
+                        if 1 <= val <= 12 and val not in stars:
+                            stars.append(val)
+                    except Exception:
+                        pass
+                if len(stars) >= 2:
+                    break
 
     # Final validation
     if len(numbers) != 5 or len(stars) != 2:
@@ -146,8 +216,8 @@ def parse_draw_from_page(html_content):
 
     return {
         "draw_date": draw_date,
-        "numbers": numbers,
-        "stars": stars,
+        "numbers": sorted(numbers),
+        "stars": sorted(stars),
         "jackpot": None,
         "winners": None
     }
@@ -182,6 +252,6 @@ def sync_latest():
         if not ok:
             return jsonify({"error": "Failed to persist draw"}), 500
 
-        return jsonify({"status": "ok", "upserted": draw.get("draw_date")})
+        return jsonify({"status": "ok", "upserted": draw.get("draw_date"), "parsed": draw})
     except Exception as e:
         return jsonify({"error": "Sync failed", "detail": str(e), "trace": traceback.format_exc()}), 500
