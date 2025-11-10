@@ -156,13 +156,30 @@ def parse_draw_from_page(html_content):
     balls_container = latest_result_container.find('div', class_='balls')
     if not balls_container:
         # broader search: div/ul with class or id containing balls
-        balls_container = latest_result_container.find(lambda t: t.name in ['div', 'ul'] and (
+        balls_container = latest_result_container.find(lambda t: t.name in ['div', 'ul', 'ol'] and (
             (t.get('class') and any(re.search(r'\bballs?\b', c, re.I) for c in t.get('class'))) or
             ('balls' in (t.get('id') or ''))
         ))
 
     # Main numbers
     if balls_container:
+        # Parse from <li> items (common on euro-millions.com)
+        for li in balls_container.find_all('li'):
+            classes = li.get('class') or []
+            is_star = any(re.search(r'(lucky|star)', cls, re.I) for cls in classes)
+            text = li.get_text(strip=True)
+            m = re.search(r'\b(\d{1,2})\b', text)
+            if not m:
+                continue
+            v = int(m.group(1))
+            if is_star:
+                if 1 <= v <= 12 and v not in stars:
+                    stars.append(v)
+            else:
+                if 1 <= v <= 50 and v not in numbers:
+                    numbers.append(v)
+
+        # Fallback: spans within balls container
         for ball_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'\bball\b', c, re.I)):
             text = ball_span.get_text(strip=True)
             if re.fullmatch(r'\d{1,2}', text):
@@ -173,7 +190,7 @@ def parse_draw_from_page(html_content):
                 except Exception:
                     pass
 
-        # Lucky stars
+        # Lucky stars from spans
         for star_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'(lucky\s*star|star)', c, re.I)):
             text = star_span.get_text(strip=True)
             if re.fullmatch(r'\d{1,2}', text):
@@ -370,22 +387,38 @@ def parse_draw_for_date(html_content, target_date_str):
         if not container:
             return local_numbers, local_stars
         # Prefer explicit balls/lucky stars markup
-        balls_container = container.find(lambda t: t.name in ['div', 'ul'] and (
+        balls_container = container.find(lambda t: t.name in ['div', 'ul', 'ol'] and (
             (t.get('class') and any(re.search(r'\bballs?\b', c, re.I) for c in t.get('class'))) or
             ('balls' in (t.get('id') or ''))
         ))
         if balls_container:
+            # Read from <li> items first
+            for li in balls_container.find_all('li'):
+                classes = li.get('class') or []
+                is_star = any(re.search(r'(lucky|star)', cls, re.I) for cls in classes)
+                t = li.get_text(strip=True)
+                m = re.search(r'\b(\d{1,2})\b', t)
+                if not m:
+                    continue
+                v = int(m.group(1))
+                if is_star:
+                    if 1 <= v <= 12 and v not in local_stars:
+                        local_stars.append(v)
+                else:
+                    if 1 <= v <= 50 and v not in local_numbers:
+                        local_numbers.append(v)
+            # Fallback to spans
             for ball_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'\bball\b', c, re.I)):
                 text = ball_span.get_text(strip=True)
                 if re.fullmatch(r'\d{1,2}', text):
                     n = int(text)
-                    if 1 <= n <= 50:
+                    if 1 <= n <= 50 and n not in local_numbers:
                         local_numbers.append(n)
             for star_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'(lucky\s*star|star)', c, re.I)):
                 text = star_span.get_text(strip=True)
                 if re.fullmatch(r'\d{1,2}', text):
                     s = int(text)
-                    if 1 <= s <= 12:
+                    if 1 <= s <= 12 and s not in local_stars:
                         local_stars.append(s)
         # If not enough, scan generic spans and list items within container
         if len(local_numbers) < 5:
