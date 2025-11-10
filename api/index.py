@@ -898,7 +898,7 @@ def parse_draw_detail_page(html_content, target_date_str, collect_debug: bool = 
                         lucky = stars_vals[:2]
                 if len(mains) == 5 and len(lucky) == 2:
                     return mains, lucky
-        # Fallback: find any cluster of 5 numbers in same parent container
+        # Fallback: find any cluster of 5 numbers in same parent container, gate stars by label or star classes
         by_parent = {}
         for el in parent.find_all(['span','li','div']):
             t = el.get_text(strip=True)
@@ -908,13 +908,40 @@ def parse_draw_detail_page(html_content, target_date_str, collect_debug: bool = 
                 by_parent.setdefault(par, []).append(v)
         for par, vals in by_parent.items():
             mains_c = [v for v in vals if 1 <= v <= 50]
-            stars_c = [v for v in vals if 1 <= v <= 12]
             if len(mains_c) >= 5:
-                mains = mains_c[:5]
+                mains_candidate = mains_c[:5]
+                # Gate stars: require explicit star/lucky classes or an in-parent Lucky Stars label
+                stars_c = []
+                try:
+                    star_nodes = par.find_all(['li','span'], class_=lambda c: isinstance(c, str) and re.search(r'(star|lucky)', c, re.I))
+                except Exception:
+                    star_nodes = []
+                for sn in star_nodes:
+                    tt = sn.get_text(strip=True)
+                    if re.fullmatch(r'\d{1,2}', tt):
+                        vv = int(tt)
+                        if 1 <= vv <= 12 and vv not in stars_c:
+                            stars_c.append(vv)
+                    if len(stars_c) >= 2:
+                        break
+                if len(stars_c) < 2:
+                    label_node = None
+                    try:
+                        label_node = par.find(string=re.compile(r'(Lucky\s*Stars?|Estrellas?)', re.I))
+                    except Exception:
+                        label_node = None
+                    if label_node:
+                        stars_parent = label_node.parent if hasattr(label_node, 'parent') else par
+                        for sp in stars_parent.find_all_next(['li','span'], limit=6):
+                            tt = sp.get_text(strip=True)
+                            if re.fullmatch(r'\d{1,2}', tt):
+                                vv = int(tt)
+                                if 1 <= vv <= 12 and vv not in stars_c:
+                                    stars_c.append(vv)
+                            if len(stars_c) >= 2:
+                                break
                 if len(stars_c) >= 2:
-                    lucky = stars_c[:2]
-                if len(mains) == 5 and len(lucky) == 2:
-                    return mains, lucky
+                    return mains_candidate, stars_c[:2]
         return mains, lucky
 
     if len(numbers) < 5 or len(stars) < 2:
@@ -923,33 +950,37 @@ def parse_draw_detail_page(html_content, target_date_str, collect_debug: bool = 
             numbers = m1
         if len(stars) < 2:
             stars = s1
+        if len(numbers) == 5 and len(stars) == 2 and provenance["source"] is None:
+            provenance["source"] = "cluster_extraction"
+            provenance["notes"].append("Used gated cluster extraction (label or star classes)")
 
-    # Fallback: whole-document token scan with sliding window
+    # Fallback: whole-document token scan guided by a Lucky Stars label
     if len(numbers) < 5 or len(stars) < 2:
-        tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', soup.get_text(" ", strip=True))]
-        for i in range(0, max(0, len(tokens) - 7)):
+        full_text = soup.get_text(" ", strip=True)
+        label_m = re.search(r'(Lucky\s*Stars?|Estrellas?)', full_text, re.I)
+        if label_m:
+            before = full_text[:label_m.start()]
+            after = full_text[label_m.end():]
+            mains_tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', before)]
+            stars_tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', after)]
             mains = []
-            j = i
-            while j < len(tokens) and len(mains) < 5:
-                v = tokens[j]
+            for v in mains_tokens:
                 if 1 <= v <= 50 and v not in mains:
                     mains.append(v)
-                j += 1
-            if len(mains) < 5:
-                continue
+                if len(mains) == 5:
+                    break
             stars_c = []
-            while j < len(tokens) and len(stars_c) < 2:
-                v = tokens[j]
+            for v in stars_tokens:
                 if 1 <= v <= 12 and v not in stars_c:
                     stars_c.append(v)
-                j += 1
-            if len(stars_c) == 2:
+                if len(stars_c) == 2:
+                    break
+            if len(mains) == 5 and len(stars_c) == 2:
                 numbers = mains
                 stars = stars_c
                 if provenance["source"] is None:
                     provenance["source"] = "token_scan"
-                    provenance["notes"].append("Used sliding window token scan after date heading")
-                break
+                    provenance["notes"].append("Label-guided token scan using Lucky Stars marker")
 
     if len(numbers) != 5 or len(stars) != 2:
         return None
