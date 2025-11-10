@@ -628,19 +628,41 @@ def sync_date():
             p = urlparse(source_url)
             base = f"{p.scheme}://{p.netloc}"
             date_dash = datetime.strptime(target_date, '%Y-%m-%d').strftime('%d-%m-%Y')
-            candidates = [
-                urljoin(base, f"/en/results/euromillions/{target_date}"),
-                urljoin(base, f"/en/results/euromillions/{date_dash}"),
-                urljoin(base, f"/results/euromillions/{target_date}"),
-                urljoin(base, f"/results/euromillions/{date_dash}"),
-            ]
+            year = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y')
+
+            # Build fallbacks for both euromillones.com and euro-millions.com
+            bases = [base]
+            if 'euromillones.com' in (p.netloc or ''):
+                bases.append(f"{p.scheme}://www.euro-millions.com")
+            elif 'euro-millions.com' in (p.netloc or ''):
+                bases.append(f"{p.scheme}://www.euromillones.com")
+
+            candidates = []
+            for b in bases:
+                # Detail pages
+                candidates.append(urljoin(b, f"/en/results/euromillions/{target_date}"))
+                candidates.append(urljoin(b, f"/en/results/euromillions/{date_dash}"))
+                candidates.append(urljoin(b, f"/results/euromillions/{target_date}"))
+                candidates.append(urljoin(b, f"/results/euromillions/{date_dash}"))
+                # euro-millions.com uses /results/<dd-mm-yyyy>
+                candidates.append(urljoin(b, f"/results/{target_date}"))
+                candidates.append(urljoin(b, f"/results/{date_dash}"))
+                # Year archive page on euro-millions.com
+                candidates.append(urljoin(b, f"/results-history-{year}"))
+
             tried = []
+            archive_text = None
             for url in candidates:
                 try:
                     r2 = requests.get(url, timeout=15, headers=headers)
                     tried.append({"url": url, "status": r2.status_code, "length": len(r2.text)})
                     if r2.status_code == 200:
-                        d2 = parse_draw_detail_page(r2.text, target_date)
+                        if f"/results-history-{year}" in url:
+                            # Multi-draw archive page: try date-scoped parser
+                            archive_text = r2.text
+                            d2 = parse_draw_for_date(r2.text, target_date)
+                        else:
+                            d2 = parse_draw_detail_page(r2.text, target_date)
                         if d2:
                             draw = d2
                             break
@@ -657,7 +679,8 @@ def sync_date():
                     "html_preview": resp.text[:800] + "..." if len(resp.text) > 800 else resp.text,
                     "html_length": len(resp.text),
                     "time_tags_found": time_tags[:10],
-                    "fallback_attempts": tried
+                    "fallback_attempts": tried,
+                    "archive_hint": True
                 }), 422
 
         ok = upsert_draw(draw)
