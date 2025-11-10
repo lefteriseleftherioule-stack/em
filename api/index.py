@@ -498,8 +498,8 @@ def parse_draw_detail_page(html_content, target_date_str):
     # Prefer explicit containers commonly used on detail pages
     container = None
     candidates = [
-        {'name': 'div', 'class': re.compile(r'(balls|winning|numbers|result)', re.I)},
-        {'name': 'section', 'class': re.compile(r'(result|numbers)', re.I)},
+        {'name': 'div', 'class': re.compile(r'(balls|winning|numbers|result|draw-results|primary|secondary)', re.I)},
+        {'name': 'section', 'class': re.compile(r'(result|numbers|euromillions)', re.I)},
         {'name': 'article', 'class': re.compile(r'(result|euromillions)', re.I)},
     ]
     for c in candidates:
@@ -510,19 +510,65 @@ def parse_draw_detail_page(html_content, target_date_str):
     if not container:
         container = soup
 
-    # Extract main numbers from typical elements
-    for sp in container.find_all(['span', 'li', 'div']):
-        t = sp.get_text(strip=True)
-        if re.fullmatch(r'\d{1,2}', t):
-            v = int(t)
-            if 1 <= v <= 50 and v not in numbers:
-                numbers.append(v)
-            elif 1 <= v <= 12 and v not in stars:
-                stars.append(v)
-        if len(numbers) >= 5 and len(stars) >= 2:
-            break
+    # Extract using clusters to avoid picking prize table numbers
+    def extract_cluster(parent):
+        mains = []
+        lucky = []
+        if not parent:
+            return mains, lucky
+        # Prefer lists of balls
+        lists = []
+        lists += parent.find_all('ul', class_=re.compile(r'(balls|numbers|main|winning)', re.I))
+        lists += parent.find_all('ol', class_=re.compile(r'(balls|numbers|main|winning)', re.I))
+        for lst in lists:
+            vals = []
+            for li in lst.find_all('li'):
+                t = li.get_text(strip=True)
+                if re.fullmatch(r'\d{1,2}', t):
+                    vals.append(int(t))
+            if len(vals) >= 5 and all(1 <= v <= 50 for v in vals[:5]):
+                mains = vals[:5]
+                # attempt to find lucky stars adjacent
+                next_sibling = lst.find_next(string=re.compile(r'(Lucky\s*Stars?|Estrellas?)', re.I))
+                if next_sibling:
+                    stars_parent = next_sibling.parent if hasattr(next_sibling, 'parent') else parent
+                    stars_vals = []
+                    for sp in stars_parent.find_all_next(['li','span'], limit=6):
+                        tt = sp.get_text(strip=True)
+                        if re.fullmatch(r'\d{1,2}', tt):
+                            vv = int(tt)
+                            if 1 <= vv <= 12:
+                                stars_vals.append(vv)
+                            if len(stars_vals) >= 2:
+                                break
+                    if len(stars_vals) >= 2:
+                        lucky = stars_vals[:2]
+                if len(mains) == 5 and len(lucky) == 2:
+                    return mains, lucky
+        # Fallback: find any cluster of 5 numbers in same parent container
+        by_parent = {}
+        for el in parent.find_all(['span','li','div']):
+            t = el.get_text(strip=True)
+            if re.fullmatch(r'\d{1,2}', t):
+                v = int(t)
+                par = el.parent
+                by_parent.setdefault(par, []).append(v)
+        for par, vals in by_parent.items():
+            mains_c = [v for v in vals if 1 <= v <= 50]
+            stars_c = [v for v in vals if 1 <= v <= 12]
+            if len(mains_c) >= 5:
+                mains = mains_c[:5]
+                if len(stars_c) >= 2:
+                    lucky = stars_c[:2]
+                if len(mains) == 5 and len(lucky) == 2:
+                    return mains, lucky
+        return mains, lucky
 
-    # Fallback: whole-document token scan
+    m1, s1 = extract_cluster(container)
+    numbers = m1
+    stars = s1
+
+    # Fallback: whole-document token scan with sliding window
     if len(numbers) < 5 or len(stars) < 2:
         tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', soup.get_text(" ", strip=True))]
         for i in range(0, max(0, len(tokens) - 7)):
@@ -647,6 +693,9 @@ def sync_date():
                 # euro-millions.com uses /results/<dd-mm-yyyy>
                 candidates.append(urljoin(b, f"/results/{target_date}"))
                 candidates.append(urljoin(b, f"/results/{date_dash}"))
+                # amp pages (simpler markup)
+                candidates.append(urljoin(b, f"/amp/results/{target_date}"))
+                candidates.append(urljoin(b, f"/amp/results/{date_dash}"))
                 # Year archive page on euro-millions.com
                 candidates.append(urljoin(b, f"/results-history-{year}"))
 
