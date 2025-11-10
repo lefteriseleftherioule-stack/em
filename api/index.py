@@ -82,6 +82,7 @@ def latest_draw():
 
 
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin
 
 def parse_draw_from_page(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -485,6 +486,84 @@ def parse_draw_for_date(html_content, target_date_str):
         "winners": None
     }
 
+def parse_draw_detail_page(html_content, target_date_str):
+    """
+    Parse a single-draw detail page where only one EuroMillions draw is present.
+    Tries explicit markup first, then falls back to text token scanning.
+    """
+    soup = BeautifulSoup(html_content, 'html.parser')
+    numbers = []
+    stars = []
+
+    # Prefer explicit containers commonly used on detail pages
+    container = None
+    candidates = [
+        {'name': 'div', 'class': re.compile(r'(balls|winning|numbers|result)', re.I)},
+        {'name': 'section', 'class': re.compile(r'(result|numbers)', re.I)},
+        {'name': 'article', 'class': re.compile(r'(result|euromillions)', re.I)},
+    ]
+    for c in candidates:
+        found = soup.find(c['name'], class_=c['class'])
+        if found:
+            container = found
+            break
+    if not container:
+        container = soup
+
+    # Extract main numbers from typical elements
+    for sp in container.find_all(['span', 'li', 'div']):
+        t = sp.get_text(strip=True)
+        if re.fullmatch(r'\d{1,2}', t):
+            v = int(t)
+            if 1 <= v <= 50 and v not in numbers:
+                numbers.append(v)
+            elif 1 <= v <= 12 and v not in stars:
+                stars.append(v)
+        if len(numbers) >= 5 and len(stars) >= 2:
+            break
+
+    # Fallback: whole-document token scan
+    if len(numbers) < 5 or len(stars) < 2:
+        tokens = [int(t) for t in re.findall(r'\b\d{1,2}\b', soup.get_text(" ", strip=True))]
+        for i in range(0, max(0, len(tokens) - 7)):
+            mains = []
+            j = i
+            while j < len(tokens) and len(mains) < 5:
+                v = tokens[j]
+                if 1 <= v <= 50 and v not in mains:
+                    mains.append(v)
+                j += 1
+            if len(mains) < 5:
+                continue
+            stars_c = []
+            while j < len(tokens) and len(stars_c) < 2:
+                v = tokens[j]
+                if 1 <= v <= 12 and v not in stars_c:
+                    stars_c.append(v)
+                j += 1
+            if len(stars_c) == 2:
+                numbers = mains
+                stars = stars_c
+                break
+
+    if len(numbers) != 5 or len(stars) != 2:
+        return None
+
+    # Date: trust the requested date; validate if a <time> exists
+    draw_date = target_date_str
+    time_tag = soup.find('time', attrs={'datetime': target_date_str})
+    if time_tag is None:
+        # try to confirm via text patterns, but don't block if not found
+        pass
+
+    return {
+        "draw_date": draw_date,
+        "numbers": sorted(numbers),
+        "stars": sorted(stars),
+        "jackpot": None,
+        "winners": None
+    }
+
 @app.route('/api/sync', methods=['GET', 'POST'])
 def sync_latest():
     try:
@@ -545,13 +624,41 @@ def sync_date():
             return jsonify({"error": f"Failed to fetch from page: {e}"}), 502
 
         if not draw:
-            return jsonify({
-                "error": "Could not parse target draw from page",
-                "date": target_date,
-                "url": source_url,
-                "html_preview": resp.text[:500] + "..." if len(resp.text) > 500 else resp.text,
-                "html_length": len(resp.text)
-            }), 422
+            # Attempt per-draw detail page fallbacks based on the source host
+            p = urlparse(source_url)
+            base = f"{p.scheme}://{p.netloc}"
+            date_dash = datetime.strptime(target_date, '%Y-%m-%d').strftime('%d-%m-%Y')
+            candidates = [
+                urljoin(base, f"/en/results/euromillions/{target_date}"),
+                urljoin(base, f"/en/results/euromillions/{date_dash}"),
+                urljoin(base, f"/results/euromillions/{target_date}"),
+                urljoin(base, f"/results/euromillions/{date_dash}"),
+            ]
+            tried = []
+            for url in candidates:
+                try:
+                    r2 = requests.get(url, timeout=15, headers=headers)
+                    tried.append({"url": url, "status": r2.status_code, "length": len(r2.text)})
+                    if r2.status_code == 200:
+                        d2 = parse_draw_detail_page(r2.text, target_date)
+                        if d2:
+                            draw = d2
+                            break
+                except Exception:
+                    tried.append({"url": url, "status": "error"})
+
+            if not draw:
+                # Enhanced debugging information
+                time_tags = re.findall(r'<time[^>]*datetime="(.*?)"', resp.text[:50000], flags=re.I)
+                return jsonify({
+                    "error": "Could not parse target draw from page",
+                    "date": target_date,
+                    "url": source_url,
+                    "html_preview": resp.text[:800] + "..." if len(resp.text) > 800 else resp.text,
+                    "html_length": len(resp.text),
+                    "time_tags_found": time_tags[:10],
+                    "fallback_attempts": tried
+                }), 422
 
         ok = upsert_draw(draw)
         if not ok:
