@@ -164,6 +164,7 @@ def parse_draw_from_page(html_content):
     # Main numbers
     if balls_container:
         # Parse from <li> items (common on euro-millions.com)
+        ordered_li_digits = []
         for li in balls_container.find_all('li'):
             classes = li.get('class') or []
             is_star = any(re.search(r'(lucky|star)', cls, re.I) for cls in classes)
@@ -172,12 +173,18 @@ def parse_draw_from_page(html_content):
             if not m:
                 continue
             v = int(m.group(1))
+            ordered_li_digits.append(v)
             if is_star:
                 if 1 <= v <= 12 and v not in stars:
                     stars.append(v)
             else:
                 if 1 <= v <= 50 and v not in numbers:
                     numbers.append(v)
+        # If we got mains but no stars, infer stars from the last two li digits within 1-12
+        if len(numbers) >= 5 and len(stars) < 2 and len(ordered_li_digits) >= 7:
+            candidates_stars = [d for d in ordered_li_digits[-4:] if 1 <= d <= 12]
+            if len(candidates_stars) >= 2:
+                stars = candidates_stars[-2:]
 
         # Fallback: spans within balls container
         for ball_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'\bball\b', c, re.I)):
@@ -223,10 +230,14 @@ def parse_draw_from_page(html_content):
             mains_list, mains_vals = candidate_mains[0]
             if len(numbers) < 5:
                 numbers = mains_vals[:5]
-        # Prefer a distinct stars list via classes
-        for lst in latest_result_container.find_all(['ul', 'ol']):
-            lst_classes = " ".join(lst.get('class') or [])
-            if re.search(r'(lucky|stars)', lst_classes, re.I):
+        # Prefer a distinct stars list among siblings of mains_list
+        if mains_list and len(stars) < 2:
+            parent = mains_list.parent
+            sibling_lists = parent.find_all(['ul', 'ol'], recursive=False) if parent else []
+            for lst in sibling_lists:
+                if lst is mains_list:
+                    continue
+                lst_classes = " ".join(lst.get('class') or [])
                 svals = []
                 for node in lst.find_all(['li', 'span']):
                     t = node.get_text(strip=True)
@@ -234,24 +245,24 @@ def parse_draw_from_page(html_content):
                         v = int(t)
                         if 1 <= v <= 12:
                             svals.append(v)
-                if len(svals) >= 2:
+                # Stars list should have exactly two star digits
+                if (re.search(r'(lucky|stars)', lst_classes, re.I) and len(svals) >= 2) or len(svals) == 2:
                     stars_list = lst
-                    if len(stars) < 2:
-                        stars = svals[:2]
-                        break
-        # If no explicit stars list, take the next list after mains_list and read two <=12 values
-        if mains_list and len(stars) < 2:
-            nxt = mains_list.find_next(['ul', 'ol'])
-            if nxt and nxt is not stars_list:
-                svals = []
-                for node in nxt.find_all(['li', 'span']):
+                    stars = svals[:2]
+                    break
+        # As a last resort, look for a combined list of 7 digits and take last two <=12
+        if len(stars) < 2:
+            for lst in latest_result_container.find_all(['ul', 'ol']):
+                vals = []
+                for node in lst.find_all(['li', 'span']):
                     t = node.get_text(strip=True)
                     if re.fullmatch(r'\d{1,2}', t):
-                        v = int(t)
-                        if 1 <= v <= 12:
-                            svals.append(v)
-                if len(svals) >= 2:
-                    stars = svals[:2]
+                        vals.append(int(t))
+                if len(vals) >= 7:
+                    cstars = [d for d in vals[-4:] if 1 <= d <= 12]
+                    if len(cstars) >= 2:
+                        stars = cstars[-2:]
+                        break
 
     # Fallback: within latest_result_container, look for generic spans (ignore heading)
     if len(numbers) < 5:
@@ -445,6 +456,7 @@ def parse_draw_for_date(html_content, target_date_str):
         ))
         if balls_container:
             # Read from <li> items first
+            ordered_li_digits = []
             for li in balls_container.find_all('li'):
                 classes = li.get('class') or []
                 is_star = any(re.search(r'(lucky|star)', cls, re.I) for cls in classes)
@@ -453,12 +465,18 @@ def parse_draw_for_date(html_content, target_date_str):
                 if not m:
                     continue
                 v = int(m.group(1))
+                ordered_li_digits.append(v)
                 if is_star:
                     if 1 <= v <= 12 and v not in local_stars:
                         local_stars.append(v)
                 else:
                     if 1 <= v <= 50 and v not in local_numbers:
                         local_numbers.append(v)
+            # If we have enough mains but no stars, infer stars from last two li digits (<=12)
+            if len(local_numbers) >= 5 and len(local_stars) < 2 and len(ordered_li_digits) >= 7:
+                cstars = [d for d in ordered_li_digits[-4:] if 1 <= d <= 12]
+                if len(cstars) >= 2:
+                    local_stars = cstars[-2:]
             # Fallback to spans
             for ball_span in balls_container.find_all('span', class_=lambda c: isinstance(c, str) and re.search(r'\bball\b', c, re.I)):
                 text = ball_span.get_text(strip=True)
@@ -493,9 +511,14 @@ def parse_draw_for_date(html_content, target_date_str):
                 mains_list, mains_vals = candidate_mains[0]
                 if len(local_numbers) < 5:
                     local_numbers = mains_vals[:5]
-            for lst in container.find_all(['ul', 'ol']):
-                lst_classes = " ".join(lst.get('class') or [])
-                if re.search(r'(lucky|stars)', lst_classes, re.I):
+            # Prefer stars list among siblings of mains_list
+            if mains_list and len(local_stars) < 2:
+                parent = mains_list.parent
+                sibling_lists = parent.find_all(['ul', 'ol'], recursive=False) if parent else []
+                for lst in sibling_lists:
+                    if lst is mains_list:
+                        continue
+                    lst_classes = " ".join(lst.get('class') or [])
                     svals = []
                     for node in lst.find_all(['li', 'span']):
                         t = node.get_text(strip=True)
@@ -503,23 +526,23 @@ def parse_draw_for_date(html_content, target_date_str):
                             v = int(t)
                             if 1 <= v <= 12:
                                 svals.append(v)
-                    if len(svals) >= 2:
+                    if (re.search(r'(lucky|stars)', lst_classes, re.I) and len(svals) >= 2) or len(svals) == 2:
                         stars_list = lst
-                        if len(local_stars) < 2:
-                            local_stars = svals[:2]
-                            break
-            if mains_list and len(local_stars) < 2:
-                nxt = mains_list.find_next(['ul', 'ol'])
-                if nxt and nxt is not stars_list:
-                    svals = []
-                    for node in nxt.find_all(['li', 'span']):
+                        local_stars = svals[:2]
+                        break
+            # Combined-list fallback
+            if len(local_stars) < 2:
+                for lst in container.find_all(['ul', 'ol']):
+                    vals = []
+                    for node in lst.find_all(['li', 'span']):
                         t = node.get_text(strip=True)
                         if re.fullmatch(r'\d{1,2}', t):
-                            v = int(t)
-                            if 1 <= v <= 12:
-                                svals.append(v)
-                    if len(svals) >= 2:
-                        local_stars = svals[:2]
+                            vals.append(int(t))
+                    if len(vals) >= 7:
+                        cstars = [d for d in vals[-4:] if 1 <= d <= 12]
+                        if len(cstars) >= 2:
+                            local_stars = cstars[-2:]
+                            break
         # If not enough, scan generic spans and list items within container
         if len(local_numbers) < 5:
             # scan common inline digit carriers
