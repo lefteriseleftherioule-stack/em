@@ -497,6 +497,14 @@ def parse_draw_detail_page(html_content, target_date_str):
 
     # Prefer explicit containers commonly used on detail pages
     container = None
+    # Anchor around the date if available
+    time_tag = soup.find('time', attrs={'datetime': target_date_str})
+    if time_tag:
+        container = time_tag.find_parent(lambda t: t.name in ['article', 'section', 'div']) or time_tag.parent
+    if not container:
+        date_h = soup.find(['h1','h2'], string=re.compile(r'EuroMillions\s+Results', re.I))
+        if date_h:
+            container = date_h.find_parent(lambda t: t.name in ['article','section','div']) or date_h.parent
     candidates = [
         {'name': 'div', 'class': re.compile(r'(balls|winning|numbers|result|draw-results|primary|secondary)', re.I)},
         {'name': 'section', 'class': re.compile(r'(result|numbers|euromillions)', re.I)},
@@ -531,6 +539,35 @@ def parse_draw_detail_page(html_content, target_date_str):
                     stars.append(v)
             if len(stars) >= 2:
                 break
+
+    # Direct list extraction (ul/ol) specifically targeting balls vs stars lists
+    if len(numbers) < 5 or len(stars) < 2:
+        # Prefer a distinct mains list
+        mains_list = None
+        stars_list = None
+        mains_list = container.find(['ul','ol'], class_=re.compile(r'(balls|main|winning)', re.I)) if container else None
+        # Lucky stars lists often have classes containing 'lucky' or 'stars'
+        stars_list = container.find(['ul','ol'], class_=re.compile(r'(lucky|stars)', re.I)) if container else None
+        if mains_list and len(numbers) < 5:
+            vals = []
+            for li in mains_list.find_all('li'):
+                t = li.get_text(strip=True)
+                if re.fullmatch(r'\d{1,2}', t):
+                    v = int(t)
+                    if 1 <= v <= 50:
+                        vals.append(v)
+            if len(vals) >= 5:
+                numbers = vals[:5]
+        if stars_list and len(stars) < 2:
+            svals = []
+            for li in stars_list.find_all('li'):
+                t = li.get_text(strip=True)
+                if re.fullmatch(r'\d{1,2}', t):
+                    v = int(t)
+                    if 1 <= v <= 12:
+                        svals.append(v)
+            if len(svals) >= 2:
+                stars = svals[:2]
 
     # Extract using clusters to avoid picking prize table numbers
     def extract_cluster(parent):
