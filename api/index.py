@@ -856,13 +856,21 @@ def sync_date():
             return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
 
         source_url = os.getenv("EURO_SOURCE_URL", "https://www.euro-millions.com/results")
-        headers = {"Accept": "text/html"}
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.8",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
+        }
+        primary_fetch_error = None
+        resp = None
+        draw = None
         try:
-            resp = requests.get(source_url, timeout=15, headers=headers)
+            resp = requests.get(source_url, timeout=(5, 20), headers=headers)
             resp.raise_for_status()
             draw = parse_draw_for_date(resp.text, target_date)
         except Exception as e:
-            return jsonify({"error": f"Failed to fetch from page: {e}"}), 502
+            # Don't fail hard here; proceed to fallbacks
+            primary_fetch_error = str(e)
 
         if not draw:
             # Attempt per-draw detail page fallbacks based on the source host
@@ -871,12 +879,19 @@ def sync_date():
             date_dash = datetime.strptime(target_date, '%Y-%m-%d').strftime('%d-%m-%Y')
             year = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y')
 
-            # Build fallbacks for both euromillones.com and euro-millions.com
-            bases = [base]
-            if 'euromillones.com' in (p.netloc or ''):
-                bases.append(f"{p.scheme}://www.euro-millions.com")
-            elif 'euro-millions.com' in (p.netloc or ''):
-                bases.append(f"{p.scheme}://www.euromillones.com")
+            # Build fallbacks, always prioritizing euro-millions.com first
+            bases = []
+            euro_millions = f"{p.scheme}://www.euro-millions.com"
+            euromillones = f"{p.scheme}://www.euromillones.com"
+            # Preferred order
+            bases.append(euro_millions)
+            bases.append(euromillones)
+            # Include the original base to cover other variants
+            if base not in bases:
+                bases.insert(0, base)
+            # Deduplicate while preserving order
+            seen = set()
+            bases = [b for b in bases if not (b in seen or seen.add(b))]
 
             candidates = []
             for b in bases:
@@ -898,7 +913,7 @@ def sync_date():
             archive_text = None
             for url in candidates:
                 try:
-                    r2 = requests.get(url, timeout=15, headers=headers)
+                    r2 = requests.get(url, timeout=(5, 20), headers=headers)
                     tried.append({"url": url, "status": r2.status_code, "length": len(r2.text)})
                     if r2.status_code == 200:
                         if f"/results-history-{year}" in url:
@@ -910,8 +925,8 @@ def sync_date():
                         if d2:
                             draw = d2
                             break
-                except Exception:
-                    tried.append({"url": url, "status": "error"})
+                except Exception as e:
+                    tried.append({"url": url, "status": "error", "error": str(e)})
 
             if not draw:
                 # Enhanced debugging information
@@ -924,7 +939,8 @@ def sync_date():
                     "html_length": len(resp.text),
                     "time_tags_found": time_tags[:10],
                     "fallback_attempts": tried,
-                    "archive_hint": True
+                    "archive_hint": True,
+                    "primary_fetch_error": primary_fetch_error
                 }), 422
 
         ok = upsert_draw(draw)
