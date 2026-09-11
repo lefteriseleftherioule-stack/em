@@ -53,17 +53,15 @@ def health():
 
     try:
         import sys
-        from .db import get_last_db_debug
+        from .db import get_last_db_debug, get_db_env_info
 
-        present_env = [
-            k for k in ("DATABASE_URL",)
-            if os.getenv(k)
-        ]
+        env_info = get_db_env_info()
 
         payload = {
             "status": "ok",
             "python_version": sys.version,
-            "env_present": present_env,
+            "env_present": env_info["present"],
+            "db_env_selected": env_info["selected"],
         }
         if str(request.args.get('debug') or '').lower() in ('1', 'true', 'yes', 'on'):
             payload["db_debug"] = get_last_db_debug()
