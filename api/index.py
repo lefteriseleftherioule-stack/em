@@ -1079,8 +1079,12 @@ def sync_latest():
             resp = requests.get(source_url, timeout=15, headers=headers)
             resp.raise_for_status()
             draw = parse_draw_from_page(resp.text)
-        except Exception as e:
-            return jsonify({"error": f"Failed to fetch from page: {e}"}), 502
+       except Exception as e:
+    traceback.print_exc()
+    return jsonify({
+        "error": "Failed to persist draw",
+        "details": str(e)
+    }), 500
 
 
         if not draw:
