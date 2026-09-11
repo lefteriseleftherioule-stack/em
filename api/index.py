@@ -53,17 +53,21 @@ def health():
 
     try:
         import sys
+        from .db import get_last_db_debug
 
         present_env = [
             k for k in ("DATABASE_URL",)
             if os.getenv(k)
         ]
 
-        return jsonify({
+        payload = {
             "status": "ok",
             "python_version": sys.version,
             "env_present": present_env,
-        })
+        }
+        if str(request.args.get('debug') or '').lower() in ('1', 'true', 'yes', 'on'):
+            payload["db_debug"] = get_last_db_debug()
+        return jsonify(payload)
 
     except Exception as e:
         return jsonify({
@@ -147,7 +151,7 @@ def latest_draw():
         return ('', 200)
 
     try:
-        from .db import get_latest_draw
+        from .db import get_latest_draw, get_last_db_debug
 
         row = get_latest_draw()
 
@@ -168,7 +172,8 @@ def latest_draw():
             })
 
         return jsonify({
-            "error": "No draws available"
+            "error": "No draws available",
+            "db_debug": get_last_db_debug()
         }), 404
 
     except Exception as e:
@@ -2772,10 +2777,15 @@ def sync_latest():
 
         from .db import (
             ensure_schema,
-            upsert_draw
+            upsert_draw,
+            get_last_db_debug
         )
 
-        ensure_schema()
+        if not ensure_schema():
+            return jsonify({
+                "error": "Database schema check failed",
+                "db_debug": get_last_db_debug()
+            }), 500
 
         # YOUR CHOSEN SOURCE
         source_url = os.getenv(
@@ -3171,7 +3181,8 @@ def sync_latest():
                 return jsonify({
                     "error": "Failed to persist draw",
                     "details": "upsert_draw returned False",
-                    "draw": draw
+                    "draw": draw,
+                    "db_debug": get_last_db_debug()
                 }), 500
 
         except Exception as e:
@@ -3182,7 +3193,8 @@ def sync_latest():
                 "error": "Failed to persist draw",
                 "details": str(e),
                 "trace": traceback.format_exc(),
-                "draw": draw
+                "draw": draw,
+                "db_debug": get_last_db_debug()
             }), 500
 
         # ----------------------------------------------------
@@ -3215,10 +3227,15 @@ def sync_date():
 
         from .db import (
             ensure_schema,
-            upsert_draw
+            upsert_draw,
+            get_last_db_debug
         )
 
-        ensure_schema()
+        if not ensure_schema():
+            return jsonify({
+                "error": "Database schema check failed",
+                "db_debug": get_last_db_debug()
+            }), 500
 
         target_date = request.args.get(
             'date'
@@ -3543,7 +3560,8 @@ def sync_date():
                 return jsonify({
                     "error": "Failed to persist draw",
                     "details": "upsert_draw returned False",
-                    "draw": draw
+                    "draw": draw,
+                    "db_debug": get_last_db_debug()
                 }), 500
 
         except Exception as e:
@@ -3554,7 +3572,8 @@ def sync_date():
                 "error": "Failed to persist draw",
                 "details": str(e),
                 "trace": traceback.format_exc(),
-                "draw": draw
+                "draw": draw,
+                "db_debug": get_last_db_debug()
             }), 500
 
         return jsonify({
