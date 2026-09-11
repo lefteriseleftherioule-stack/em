@@ -304,7 +304,54 @@ def parse_draw_from_page(html_content):
                         pass
                 if len(stars) >= 2:
                     break
+    # Text fallback for EuroMillones.com latest-results page.
+    # The page presents the latest draw as:
+    # date -> 5 main numbers -> 2 Lucky Stars -> "Category Winners Prize"
+    if len(numbers) != 5 or len(stars) != 2:
+        try:
+            full_text = soup.get_text(" ", strip=True)
+            date_text_value = date_match.group(0)
 
+            date_pos = full_text.find(date_text_value)
+            if date_pos >= 0:
+                after_date = full_text[date_pos + len(date_text_value):]
+
+                # Stop before the prize/category table so unrelated numbers
+                # cannot be mistaken for lottery numbers.
+                stop_match = re.search(
+                    r'\bCategory\s+Winners\s+Prize\b',
+                    after_date,
+                    re.I
+                )
+
+                if stop_match:
+                    result_window = after_date[:stop_match.start()]
+                else:
+                    result_window = after_date[:500]
+
+                tokens = [
+                    int(x)
+                    for x in re.findall(r'\b\d{1,2}\b', result_window)
+                ]
+
+                # EuroMillions = 5 main numbers followed by 2 Lucky Stars.
+                if len(tokens) >= 7:
+                    candidate_numbers = tokens[:5]
+                    candidate_stars = tokens[5:7]
+
+                    if (
+                        len(candidate_numbers) == 5
+                        and len(candidate_stars) == 2
+                        and all(1 <= n <= 50 for n in candidate_numbers)
+                        and all(1 <= s <= 12 for s in candidate_stars)
+                    ):
+                        numbers = candidate_numbers
+                        stars = candidate_stars
+
+        except Exception:
+            pass
+
+    
     # Final validation, with a robust fallback if primary extraction failed
     if len(numbers) != 5 or len(stars) != 2:
         # Document-level fallback: collect digits after the detected date text
