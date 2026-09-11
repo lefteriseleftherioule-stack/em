@@ -12,6 +12,37 @@ import json
 app = Flask(__name__)
 
 
+def _get_db_module():
+    from . import db as db_module
+    return db_module
+
+
+def _get_last_db_debug_safe():
+    db_module = _get_db_module()
+    getter = getattr(db_module, "get_last_db_debug", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            return {}
+    return {}
+
+
+def _get_db_env_info_safe():
+    db_module = _get_db_module()
+    getter = getattr(db_module, "get_db_env_info", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            pass
+    present = [k for k in ("DATABASE_URL",) if os.getenv(k)]
+    return {
+        "present": present,
+        "selected": "DATABASE_URL" if present else None,
+    }
+
+
 # ============================================================
 # CORS
 # ============================================================
@@ -53,9 +84,8 @@ def health():
 
     try:
         import sys
-        from .db import get_last_db_debug, get_db_env_info
 
-        env_info = get_db_env_info()
+        env_info = _get_db_env_info_safe()
 
         payload = {
             "status": "ok",
@@ -64,7 +94,7 @@ def health():
             "db_env_selected": env_info["selected"],
         }
         if str(request.args.get('debug') or '').lower() in ('1', 'true', 'yes', 'on'):
-            payload["db_debug"] = get_last_db_debug()
+            payload["db_debug"] = _get_last_db_debug_safe()
         return jsonify(payload)
 
     except Exception as e:
@@ -149,7 +179,7 @@ def latest_draw():
         return ('', 200)
 
     try:
-        from .db import get_latest_draw, get_last_db_debug
+        from .db import get_latest_draw
 
         row = get_latest_draw()
 
@@ -171,7 +201,7 @@ def latest_draw():
 
         return jsonify({
             "error": "No draws available",
-            "db_debug": get_last_db_debug()
+            "db_debug": _get_last_db_debug_safe()
         }), 404
 
     except Exception as e:
@@ -2775,14 +2805,13 @@ def sync_latest():
 
         from .db import (
             ensure_schema,
-            upsert_draw,
-            get_last_db_debug
+            upsert_draw
         )
 
         if not ensure_schema():
             return jsonify({
                 "error": "Database schema check failed",
-                "db_debug": get_last_db_debug()
+                "db_debug": _get_last_db_debug_safe()
             }), 500
 
         # YOUR CHOSEN SOURCE
@@ -3180,7 +3209,7 @@ def sync_latest():
                     "error": "Failed to persist draw",
                     "details": "upsert_draw returned False",
                     "draw": draw,
-                    "db_debug": get_last_db_debug()
+                    "db_debug": _get_last_db_debug_safe()
                 }), 500
 
         except Exception as e:
@@ -3192,7 +3221,7 @@ def sync_latest():
                 "details": str(e),
                 "trace": traceback.format_exc(),
                 "draw": draw,
-                "db_debug": get_last_db_debug()
+                "db_debug": _get_last_db_debug_safe()
             }), 500
 
         # ----------------------------------------------------
@@ -3225,14 +3254,13 @@ def sync_date():
 
         from .db import (
             ensure_schema,
-            upsert_draw,
-            get_last_db_debug
+            upsert_draw
         )
 
         if not ensure_schema():
             return jsonify({
                 "error": "Database schema check failed",
-                "db_debug": get_last_db_debug()
+                "db_debug": _get_last_db_debug_safe()
             }), 500
 
         target_date = request.args.get(
@@ -3559,7 +3587,7 @@ def sync_date():
                     "error": "Failed to persist draw",
                     "details": "upsert_draw returned False",
                     "draw": draw,
-                    "db_debug": get_last_db_debug()
+                    "db_debug": _get_last_db_debug_safe()
                 }), 500
 
         except Exception as e:
@@ -3571,7 +3599,7 @@ def sync_date():
                 "details": str(e),
                 "trace": traceback.format_exc(),
                 "draw": draw,
-                "db_debug": get_last_db_debug()
+                "db_debug": _get_last_db_debug_safe()
             }), 500
 
         return jsonify({
