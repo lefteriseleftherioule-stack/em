@@ -1026,54 +1026,15 @@ def sync_latest():
         from .db import ensure_schema, upsert_draw
         ensure_schema()
 
-       source_url = os.getenv("EURO_SOURCE_URL", "https://www.euro-millions.com/results")
+        source_url = os.getenv("EURO_SOURCE_URL", "https://www.euro-millions.com/results")
+        try:
+            headers = {"Accept": "text/html"}
+            resp = requests.get(source_url, timeout=15, headers=headers)
+            resp.raise_for_status()
+            draw = parse_draw_from_page(resp.text)
+        except Exception as e:
+            return jsonify({"error": f"Failed to fetch from page: {e}"}), 502
 
-source_urls = []
-for candidate in [
-    source_url,
-    "https://www.euro-millions.com/results",
-    "https://www.euromillones.com/en/results/euromillions",
-]:
-    if candidate and candidate not in source_urls:
-        source_urls.append(candidate)
-
-headers = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.8",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36",
-}
-
-resp = None
-draw = None
-fetch_errors = []
-
-for candidate_url in source_urls:
-    try:
-        r = requests.get(
-            candidate_url,
-            timeout=(5, 15),
-            headers=headers
-        )
-        r.raise_for_status()
-
-        source_url = candidate_url
-        resp = r
-        draw = parse_draw_from_page(r.text)
-
-        if draw:
-            break
-
-    except Exception as e:
-        fetch_errors.append({
-            "url": candidate_url,
-            "error": str(e)
-        })
-
-if resp is None:
-    return jsonify({
-        "error": "Failed to fetch from all source pages",
-        "attempts": fetch_errors
-    }), 502
 
         if not draw:
             # Fallback: derive latest date from page, then try detail/archive parsers
